@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="28 28 456 456" role="img" aria-label="Nexora icon">
+<title>Nexora icon</title>
+<defs><linearGradient id="ilid" gradientUnits="userSpaceOnUse" x1="72" y1="0" x2="440" y2="0"><stop offset="0" stop-color="#84CC16"/><stop offset=".42" stop-color="#34D399"/><stop offset="1" stop-color="#059669"/></linearGradient>
+<radialGradient id="iiris" gradientUnits="userSpaceOnUse" cx="256" cy="256" r="58" fx="244" fy="242"><stop offset="0" stop-color="#D9F99D"/><stop offset=".5" stop-color="#34D399"/><stop offset="1" stop-color="#059669"/></radialGradient></defs>
+<path d="M72 256C150 92 362 92 440 256C362 166 150 166 72 256Z" fill="url(#ilid)"/><path d="M72 256C150 420 362 420 440 256C362 346 150 346 72 256Z" fill="url(#ilid)"/>
+<circle cx="256" cy="256" r="56" fill="url(#iiris)" stroke="#059669" stroke-width="10"/>
+<circle cx="256" cy="256" r="24" fill="#0F172A"/><circle cx="247" cy="247" r="6.5" fill="#FFFFFF"/>
+</svg>
