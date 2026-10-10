@@ -12,6 +12,8 @@ class ViolationResponse(BaseModel):
     violation_type: str
     confidence: float
     timestamp: datetime
+    resolved_at: Optional[datetime] = None
+    is_resolved: bool = False
     frame_path: Optional[str]
     frame_url: Optional[str] = None
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 
 from app.api.deps import get_camera_manager
 from app.camera.manager import CameraManager
@@ -12,7 +12,7 @@ router = APIRouter(tags=["health"])
 async def health(request: Request):
     try:
         manager: CameraManager = get_camera_manager(request)
-        active = sum(1 for cid in manager._entries if manager.is_running(cid))
+        active = manager.active_count()
         model_loaded = hasattr(request.app.state, "detector")
     except Exception:
         active = 0
@@ -29,11 +29,7 @@ async def health(request: Request):
 async def metrics(request: Request):
     try:
         manager: CameraManager = get_camera_manager(request)
-        counts_by_camera = {
-            str(cid): entry.latest_counts
-            for cid, entry in manager._entries.items()
-            if manager.is_running(cid)
-        }
+        counts_by_camera = manager.counts_snapshot()
     except Exception:
         counts_by_camera = {}
 

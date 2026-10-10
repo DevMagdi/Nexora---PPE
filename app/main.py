@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
@@ -31,11 +32,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.detector = PPEDetector(settings.MODEL_PATH, settings.DETECTION_CONFIDENCE)
     logger.info("YOLO model loaded from %s", settings.MODEL_PATH)
 
-    # Start camera manager
+    # Start camera manager (بيشغّل كمان frame-cleanup task داخليًا)
     from app.camera.manager import CameraManager
     app.state.camera_manager = CameraManager(app.state.detector)
     await app.state.camera_manager.start()
     logger.info("Camera manager started")
+
+    if not settings.API_KEY:
+        logger.warning(
+            "⚠️  API_KEY is not configured — write endpoints (create/update/delete/"
+            "start/stop cameras, resolve violations) are currently UNPROTECTED."
+        )
 
     yield
 
@@ -49,8 +56,16 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Construction PPE Detection API",
         description="Real-time PPE compliance monitoring for construction sites",
-        version="2.0.0",
+        version="2.1.0",
         lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     from app.api.routes.health import router as health_router
@@ -70,7 +85,7 @@ def create_app() -> FastAPI:
     app.mount("/frames", StaticFiles(directory=settings.FRAMES_DIR), name="frames")
 
     # Serve web dashboard (must be last)
-    #app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
+    # app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
 
     return app
 

@@ -112,14 +112,27 @@ const CURRENT_USER = getCurrentUser()
 
 const CORE_KEYWORDS = ["hardhat", "helmet", "vest", "mask"]
 
+/**
+ * يحوّل أي صيغة لنوع المخالفة (NO-Hardhat / no_hardhat / NO Hardhat...)
+ * لمفتاح موحّد (حروف صغيرة + بدون رموز) عشان المقارنة تبقى موثوقة
+ * بغض النظر عن الصيغة اللي راجعة من الـ backend فعليًا.
+ */
+function normalizeViolationKey(type: string): string {
+  return type.toLowerCase().replace(/[^a-z]/g, "")
+}
+
 const VIOLATION_LABELS: Record<string, string> = {
-  no_hardhat: "بدون خوذة",
-  no_helmet: "بدون خوذة",
-  no_vest: "بدون سترة عاكسة",
-  no_mask: "بدون كمامة",
-  no_gloves: "بدون قفازات",
-  no_goggles: "بدون نظارات واقية",
-  no_boots: "بدون حذاء أمان",
+  nohardhat: "بدون خوذة",
+  nohelmet: "بدون خوذة",
+  nosafetyvest: "بدون سترة عاكسة",
+  novest: "بدون سترة عاكسة",
+  nomask: "بدون كمامة",
+  nogloves: "بدون قفازات",
+  nogoggles: "بدون نظارات واقية",
+  nosafetyboots: "بدون حذاء أمان",
+  noboots: "بدون حذاء أمان",
+  nolabcoat: "بدون بالطو واقي",
+  nocoat: "بدون بالطو واقي",
 }
 
 const TAB_TITLES: Record<TabKey, string> = {
@@ -145,7 +158,8 @@ function isCoreType(type: string) {
 
 /** اسم عربي لنوع المخالفة مع fallback على بيانات الـ API ثم النص الخام */
 function violationLabel(type: string, ppeLabels: Map<string, string>) {
-  return VIOLATION_LABELS[type.toLowerCase()] ?? ppeLabels.get(type) ?? type.replace(/[_-]+/g, " ")
+  const key = normalizeViolationKey(type)
+  return VIOLATION_LABELS[key] ?? ppeLabels.get(type) ?? type.replace(/[_-]+/g, " ")
 }
 
 function iso(d: Date) {

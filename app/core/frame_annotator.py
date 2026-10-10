@@ -58,7 +58,6 @@ def annotate_frame(
             padding=4,
         )
 
-    # Sideboard counts
     for i, text in enumerate([
         f"Hardhats: {hardhat_count}",
         f"Safety Vests: {vest_count}",

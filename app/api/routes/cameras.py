@@ -6,11 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_camera_manager
 from app.camera.manager import CameraManager
+from app.core.security import require_api_key
 from app.db.models import Camera
 from app.db.session import get_db
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
+
+
+def _to_response(cam: Camera, manager: CameraManager) -> CameraResponse:
+    return CameraResponse(
+        **{c: getattr(cam, c) for c in CameraResponse.model_fields if c != "is_running"},
+        is_running=manager.is_running(cam.id),
+    )
 
 
 @router.get("", response_model=list[CameraResponse])
@@ -21,17 +29,15 @@ async def list_cameras(
     result = await db.execute(select(Camera))
     cameras = result.scalars().all()
     manager: CameraManager = get_camera_manager(request)
-
-    return [
-        CameraResponse(
-            **{c: getattr(cam, c) for c in CameraResponse.model_fields if c != "is_running"},
-            is_running=manager.is_running(cam.id),
-        )
-        for cam in cameras
-    ]
+    return [_to_response(cam, manager) for cam in cameras]
 
 
-@router.post("", response_model=CameraResponse, status_code=201)
+@router.post(
+    "",
+    response_model=CameraResponse,
+    status_code=201,
+    dependencies=[Depends(require_api_key)],
+)
 async def create_camera(
     body: CameraCreate,
     request: Request,
@@ -46,7 +52,9 @@ async def create_camera(
     db.add(cam)
     await db.commit()
     await db.refresh(cam)
-    return CameraResponse.model_validate(cam)
+
+    manager: CameraManager = get_camera_manager(request)
+    return _to_response(cam, manager)
 
 
 @router.get("/{camera_id}", response_model=CameraResponse)
@@ -60,13 +68,14 @@ async def get_camera(
         raise HTTPException(status_code=404, detail="Camera not found")
 
     manager: CameraManager = get_camera_manager(request)
-    return CameraResponse(
-        **{c: getattr(cam, c) for c in CameraResponse.model_fields if c != "is_running"},
-        is_running=manager.is_running(cam.id),
-    )
+    return _to_response(cam, manager)
 
 
-@router.put("/{camera_id}", response_model=CameraResponse)
+@router.put(
+    "/{camera_id}",
+    response_model=CameraResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def update_camera(
     camera_id: int,
     body: CameraUpdate,
@@ -90,13 +99,10 @@ async def update_camera(
     manager: CameraManager = get_camera_manager(request)
     manager.update_enabled_classes(camera_id, cam.enabled_classes)
 
-    return CameraResponse(
-        **{c: getattr(cam, c) for c in CameraResponse.model_fields if c != "is_running"},
-        is_running=manager.is_running(cam.id),
-    )
+    return _to_response(cam, manager)
 
 
-@router.delete("/{camera_id}", status_code=204)
+@router.delete("/{camera_id}", status_code=204, dependencies=[Depends(require_api_key)])
 async def delete_camera(
     camera_id: int,
     request: Request,
@@ -113,7 +119,7 @@ async def delete_camera(
     await db.commit()
 
 
-@router.post("/{camera_id}/start")
+@router.post("/{camera_id}/start", dependencies=[Depends(require_api_key)])
 async def start_camera(
     camera_id: int,
     request: Request,
@@ -128,7 +134,7 @@ async def start_camera(
     try:
         ok = await manager.start_camera(camera_id, cam.source_type, cam.source_uri, cam.enabled_classes)
     except ValueError as e:
-        # ✅ بدل 500: رجّع 400 برسالة مفهومة
+        # بدل 500: رجّع 400 برسالة مفهومة
         raise HTTPException(status_code=400, detail=str(e))
 
     if not ok:
@@ -139,7 +145,7 @@ async def start_camera(
     return {"status": "started", "camera_id": camera_id}
 
 
-@router.post("/{camera_id}/stop")
+@router.post("/{camera_id}/stop", dependencies=[Depends(require_api_key)])
 async def stop_camera(
     camera_id: int,
     request: Request,

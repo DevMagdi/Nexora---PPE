@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 class AlertLogResponse(BaseModel):
     id: int
-    violation_id: int
+    violation_id: Optional[int]
     handler_type: str
     sent_at: datetime
     success: bool

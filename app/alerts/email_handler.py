@@ -32,14 +32,12 @@ class EmailHandler(AlertHandler):
 
         frame_path = frame_path.replace("\\", "/").lstrip("/")
 
-        # إذا كان absolute path
         if os.path.isabs(frame_path):
             return frame_path
 
         return os.path.join(settings.FRAMES_DIR, frame_path)
 
     async def send(self, violation: ViolationEvent) -> bool:
-        # اعتبرها "skip" إذا الإيميل مش متكوّن بالكامل
         if not settings.SENDER_EMAIL or not settings.RECEIVER_EMAIL or not settings.EMAIL_PASSWORD:
             logger.warning("Email not configured (sender/receiver/password missing), skipping alert")
             return False
@@ -57,7 +55,6 @@ class EmailHandler(AlertHandler):
         )
         message.attach(MIMEText(body, "plain"))
 
-        # Attach frame if exists
         if violation.frame_path:
             full_path = self._resolve_frame_path(violation.frame_path)
             if full_path and os.path.exists(full_path):
@@ -84,6 +81,7 @@ class EmailHandler(AlertHandler):
                 username=settings.SENDER_EMAIL,
                 password=settings.EMAIL_PASSWORD,
                 start_tls=True,
+                timeout=settings.ALERT_SMTP_TIMEOUT_SECONDS,
             )
             logger.info(
                 "Email alert sent for camera %d (%s)",

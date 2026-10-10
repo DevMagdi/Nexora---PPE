@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_camera_manager
 from app.camera.manager import CameraManager
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,14 +29,13 @@ async def _mjpeg_generator(manager: CameraManager, camera_id: int):
                 + frame
                 + b"\r\n"
             )
-        await asyncio.sleep(0.04)  # ~25 fps max
+        await asyncio.sleep(settings.STREAM_FPS_DELAY_SECONDS)
 
 
 @router.get("/stream/{camera_id}")
 async def mjpeg_stream(camera_id: int, request: Request):
     manager: CameraManager = get_camera_manager(request)
     if not manager.is_running(camera_id):
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Camera not running")
 
     return StreamingResponse(
@@ -46,7 +47,6 @@ async def mjpeg_stream(camera_id: int, request: Request):
 @router.websocket("/ws/{camera_id}")
 async def websocket_stream(websocket: WebSocket, camera_id: int):
     await websocket.accept()
-    request = websocket
     manager: CameraManager = websocket.app.state.camera_manager
 
     if not manager.is_running(camera_id):
