@@ -1,14 +1,18 @@
+// frontend/src/App.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import AddCameraForm from "@/components/AddCameraForm"
+import ConfirmDialog from "@/components/ConfirmDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   useCameras,
+  useDeleteCamera,
   useHealth,
   usePPEClassesMeta,
+  useResolveViolation,
   useStartCamera,
   useStopCamera,
   useViolations,
@@ -35,6 +39,7 @@ import {
   Menu,
   Moon,
   MonitorPlay,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -46,6 +51,7 @@ import {
   Sparkles,
   Square,
   Sun,
+  Trash2,
   Users,
   Wifi,
   WifiOff,
@@ -105,7 +111,9 @@ function getCurrentUser() {
     const raw = localStorage.getItem("nexora-user")
     const u = raw ? JSON.parse(raw) : null
     if (u?.name) return { name: String(u.name), role: String(u.role ?? "") }
-  } catch { /* بيانات غير صالحة، نتجاهلها */ }
+  } catch {
+    /* بيانات غير صالحة، نتجاهلها */
+  }
   return { name: "مستخدم Nexora", role: "حساب محلي" }
 }
 const CURRENT_USER = getCurrentUser()
@@ -307,11 +315,19 @@ function useLatest<T>(value: T | undefined) {
 /** الوضع الفاتح هو الأساسي، والداكن اختياري ومتحفوظ في المتصفح */
 function useTheme() {
   const [dark, setDark] = useState(() => {
-    try { return localStorage.getItem("nexora-theme") === "dark" } catch { return false }
+    try {
+      return localStorage.getItem("nexora-theme") === "dark"
+    } catch {
+      return false
+    }
   })
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
-    try { localStorage.setItem("nexora-theme", dark ? "dark" : "light") } catch { /* التخزين غير متاح */ }
+    try {
+      localStorage.setItem("nexora-theme", dark ? "dark" : "light")
+    } catch {
+      /* التخزين غير متاح */
+    }
   }, [dark])
   return [dark, setDark] as const
 }
@@ -355,9 +371,7 @@ function StatCard({ label, value, icon, tone = "primary", unit, plus, hint, live
   return (
     <Card featured={featured} className="group relative h-full overflow-hidden p-7">
       <div className="mb-6 flex items-start justify-between">
-        <div className={`flex size-12 items-center justify-center rounded-xl ${t.chip} ${t.text}`}>
-          {icon}
-        </div>
+        <div className={`flex size-12 items-center justify-center rounded-xl ${t.chip} ${t.text}`}>{icon}</div>
         {live !== undefined && <LiveDot tone={tone === "destructive" ? "destructive" : "success"} active={live} />}
       </div>
       <div className={`text-[2.5rem] font-bold leading-none tabular-nums ${featured ? "text-gradient" : "text-foreground"}`}>
@@ -393,9 +407,16 @@ function ComplianceRing({ value, live, hint }: { value: number | undefined; live
         <svg viewBox="0 0 128 128" className="size-full -rotate-90" aria-hidden="true">
           <circle cx="64" cy="64" r={R} fill="none" strokeWidth="10" className="stroke-muted" />
           <circle
-            cx="64" cy="64" r={R} fill="none" strokeWidth="10" strokeLinecap="round" stroke="currentColor"
+            cx="64"
+            cy="64"
+            r={R}
+            fill="none"
+            strokeWidth="10"
+            strokeLinecap="round"
+            stroke="currentColor"
             className={`${ringClass} transition-[stroke-dashoffset] duration-700`}
-            strokeDasharray={C} strokeDashoffset={C * (1 - v / 100)}
+            strokeDasharray={C}
+            strokeDashoffset={C * (1 - v / 100)}
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center" dir="ltr">
@@ -428,7 +449,11 @@ function EmptyState({
   compact?: boolean
 }) {
   return (
-    <div className={`flex flex-col items-center justify-center text-center ${compact ? "py-10" : "rounded-2xl border border-dashed border-border bg-card py-16"}`}>
+    <div
+      className={`flex flex-col items-center justify-center text-center ${
+        compact ? "py-10" : "rounded-2xl border border-dashed border-border bg-card py-16"
+      }`}
+    >
       <div className="relative mb-5 flex size-20 items-center justify-center" aria-hidden="true">
         <span className="absolute inset-0 animate-soft-pulse rounded-full bg-primary/15" />
         <span className="absolute inset-0 rounded-full bg-primary-light" />
@@ -444,26 +469,83 @@ function EmptyState({
   )
 }
 
-function SegToggle({ checked, onChange, labelOn, labelOff }: { checked: boolean; onChange: (v: boolean) => void; labelOn: string; labelOff: string }) {
+function ErrorState({
+  title,
+  desc = "تحقق من اتصال الخادم ثم أعد المحاولة.",
+  onRetry,
+  compact = false,
+}: {
+  title: string
+  desc?: string
+  onRetry: () => void
+  compact?: boolean
+}) {
+  return (
+    <EmptyState
+      compact={compact}
+      icon={<WifiOff className="size-6 text-destructive" />}
+      title={title}
+      desc={desc}
+      action={
+        <Button type="button" variant="outline" onClick={onRetry} className="gap-2 rounded-xl">
+          <RefreshCw className="size-4" /> إعادة المحاولة
+        </Button>
+      }
+    />
+  )
+}
+
+function SegToggle({
+  checked,
+  onChange,
+  labelOn,
+  labelOff,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  labelOn: string
+  labelOff: string
+}) {
   const base = "relative z-10 rounded-lg px-3.5 py-1.5 transition-colors"
   return (
-    <div role="group" className="relative inline-grid grid-cols-2 rounded-xl border border-border/80 bg-muted/60 p-1 text-xs font-semibold">
+    <div
+      role="group"
+      className="relative inline-grid grid-cols-2 rounded-xl border border-border/80 bg-muted/60 p-1 text-xs font-semibold"
+    >
       <span
         aria-hidden="true"
         className="absolute bottom-1 start-1 top-1 w-[calc(50%-4px)] rounded-lg border border-border/50 bg-card shadow-md transition-transform duration-200 ease-out"
         style={{ transform: checked ? "translateX(-100%)" : "translateX(0)" }}
       />
-      <button type="button" aria-pressed={!checked} onClick={() => onChange(false)} className={`${base} ${!checked ? "font-bold text-foreground" : "text-muted-foreground"}`}>
+      <button
+        type="button"
+        aria-pressed={!checked}
+        onClick={() => onChange(false)}
+        className={`${base} ${!checked ? "font-bold text-foreground" : "text-muted-foreground"}`}
+      >
         {labelOff}
       </button>
-      <button type="button" aria-pressed={checked} onClick={() => onChange(true)} className={`${base} ${checked ? "font-bold text-foreground" : "text-muted-foreground"}`}>
+      <button
+        type="button"
+        aria-pressed={checked}
+        onClick={() => onChange(true)}
+        className={`${base} ${checked ? "font-bold text-foreground" : "text-muted-foreground"}`}
+      >
         {labelOn}
       </button>
     </div>
   )
 }
 
-function NavItem({ icon, label, active, onClick, badge, hint, disabled }: {
+function NavItem({
+  icon,
+  label,
+  active,
+  onClick,
+  badge,
+  hint,
+  disabled,
+}: {
   icon: ReactNode
   label: string
   active: boolean
@@ -479,11 +561,22 @@ function NavItem({ icon, label, active, onClick, badge, hint, disabled }: {
       disabled={disabled}
       onClick={onClick}
       className={`group relative flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-        active ? "bg-primary-light text-primary ring-1 ring-inset ring-primary/25" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        active
+          ? "bg-primary-light text-primary ring-1 ring-inset ring-primary/25"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground"
       }`}
     >
-      {active && <span aria-hidden="true" className="absolute end-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-s-full bg-primary" />}
-      <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${active ? "bg-primary text-primary-foreground shadow-sm" : "bg-muted text-muted-foreground group-hover:text-foreground"}`}>
+      {active && (
+        <span
+          aria-hidden="true"
+          className="absolute end-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-s-full bg-primary"
+        />
+      )}
+      <span
+        className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+          active ? "bg-primary text-primary-foreground shadow-sm" : "bg-muted text-muted-foreground group-hover:text-foreground"
+        }`}
+      >
         {icon}
       </span>
       <span className="flex-1 truncate text-start">{label}</span>
@@ -502,7 +595,11 @@ function Toast({ toast, onClose }: { toast: ToastState | null; onClose: () => vo
   const ok = toast.tone === "success"
   return (
     <div role="status" aria-live="polite" className="fixed inset-x-0 bottom-4 z-[60] mx-auto w-fit max-w-[92vw] animate-fade-in-up">
-      <div className={`glass flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-semibold shadow-2xl ring-1 ${ok ? "ring-success/40" : "ring-destructive/40"}`}>
+      <div
+        className={`glass flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-semibold shadow-2xl ring-1 ${
+          ok ? "ring-success/40" : "ring-destructive/40"
+        }`}
+      >
         {ok ? <CheckCircle2 className="size-4 shrink-0 text-success" /> : <AlertTriangle className="size-4 shrink-0 text-destructive" />}
         <span>{toast.text}</span>
         <button type="button" aria-label="إغلاق" onClick={onClose} className="ms-1 rounded-md p-1 text-muted-foreground hover:text-foreground">
@@ -580,7 +677,15 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
         <h3 className="mb-2 text-xl font-bold">البث متوقف حاليًا</h3>
         <p className="mb-6 max-w-sm text-sm text-muted-foreground">«{camera.name}» لا تعمل الآن. اضغط تشغيل لبدء البث والتحليل اللحظي.</p>
         <button type="button" className="btn-cta" onClick={onStart} disabled={pending}>
-          {pending ? <><Loader2 className="size-4 animate-spin" /> جارٍ التشغيل...</> : <><Play className="size-4 fill-current" /> تشغيل البث الآن</>}
+          {pending ? (
+            <>
+              <Loader2 className="size-4 animate-spin" /> جارٍ التشغيل...
+            </>
+          ) : (
+            <>
+              <Play className="size-4 fill-current" /> تشغيل البث الآن
+            </>
+          )}
         </button>
       </div>
     )
@@ -616,7 +721,11 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="flex items-center gap-2.5 truncate text-lg font-bold text-white drop-shadow-lg">
-              <span className={`size-2.5 shrink-0 rounded-full ${status === "open" ? "bg-destructive animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.7)]" : "bg-warning"}`} />
+              <span
+                className={`size-2.5 shrink-0 rounded-full ${
+                  status === "open" ? "bg-destructive animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.7)]" : "bg-warning"
+                }`}
+              />
               {camera.name}
             </h2>
             <p className="mt-1.5 text-xs text-white/60">
@@ -624,7 +733,11 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
               {status !== "open" && status !== "idle" && <span className="ms-2 text-warning">{LIVE_STATUS_LABEL[status]}</span>}
             </p>
           </div>
-          <Badge className={`shrink-0 border-none px-2.5 py-1 text-xs font-bold text-white backdrop-blur ${status === "open" ? "bg-red-600/95 live-ring" : "bg-amber-700/95"}`}>
+          <Badge
+            className={`shrink-0 border-none px-2.5 py-1 text-xs font-bold text-white backdrop-blur ${
+              status === "open" ? "bg-red-600/95 live-ring" : "bg-amber-700/95"
+            }`}
+          >
             {status === "open" ? "مباشر" : LIVE_STATUS_LABEL[status] || "..."}
           </Badge>
         </div>
@@ -638,13 +751,30 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
             <LiveMetric value={counts.hardhat_count} label="خوذات" />
             <LiveMetric value={counts.vest_count} label="سترات" />
             <div className="rounded-xl bg-white/10 px-3.5 py-2 ring-1 ring-white/15 backdrop-blur-md">
-              <div className={`text-base font-bold tabular-nums ${compliance === undefined ? "text-white" : compliance >= 90 ? "text-success" : compliance >= 70 ? "text-warning" : "text-destructive"}`}>
+              <div
+                className={`text-base font-bold tabular-nums ${
+                  compliance === undefined
+                    ? "text-white"
+                    : compliance >= 90
+                      ? "text-success"
+                      : compliance >= 70
+                        ? "text-warning"
+                        : "text-destructive"
+                }`}
+              >
                 {compliance === undefined ? "—" : `${compliance}%`}
               </div>
               <div className="mt-0.5 text-white/70">التزام</div>
             </div>
           </div>
-          <Button type="button" size="sm" variant="destructive" onClick={onStop} disabled={pending} className="gap-2 rounded-xl shadow-xl shadow-destructive/30">
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            onClick={onStop}
+            disabled={pending}
+            className="gap-2 rounded-xl shadow-xl shadow-destructive/30"
+          >
             {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Square size={14} fill="currentColor" />} إيقاف البث
           </Button>
         </div>
@@ -658,13 +788,27 @@ interface CameraCardProps {
   ppeLabels: Map<string, string>
   allowStream: boolean
   pending: boolean
+  deletePending: boolean
   alerts: number
   onToggle: () => void
   onWatch: () => void
+  onEdit: () => void
+  onDelete: () => void
 }
 
 /** كارت كاميرا: بيفتح بث المعاينة فقط لو الكارت ظاهر على الشاشة وضمن حد الاتصالات */
-function CameraCard({ camera, ppeLabels, allowStream, pending, alerts, onToggle, onWatch }: CameraCardProps) {
+function CameraCard({
+  camera,
+  ppeLabels,
+  allowStream,
+  pending,
+  deletePending,
+  alerts,
+  onToggle,
+  onWatch,
+  onEdit,
+  onDelete,
+}: CameraCardProps) {
   const [ref, inView] = useInView<HTMLDivElement>()
   const showStream = camera.is_running && allowStream && inView
   const classes = camera.enabled_classes ?? []
@@ -683,16 +827,18 @@ function CameraCard({ camera, ppeLabels, allowStream, pending, alerts, onToggle,
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center bg-secondary/20 text-muted-foreground">
               {camera.is_running ? <MonitorPlay className="mb-2 size-10 opacity-25" /> : <CameraIcon className="mb-2 size-10 opacity-25" />}
-              <span className="text-xs font-medium opacity-60">
-                {camera.is_running ? "تعمل · اضغط للمشاهدة" : "متوقفة"}
-              </span>
+              <span className="text-xs font-medium opacity-60">{camera.is_running ? "تعمل · اضغط للمشاهدة" : "متوقفة"}</span>
             </div>
           )}
 
           <div className="absolute end-3 top-3 rounded-lg border border-white/10 bg-black/70 px-2 py-1 text-[11px] tabular-nums text-white backdrop-blur-md">
             #{camera.id}
           </div>
-          <div className={`absolute start-3 top-3 flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold text-white shadow-sm ${!camera.is_running ? "bg-slate-600/90" : alerts > 0 ? "bg-red-600/95" : "bg-emerald-700/95"}`}>
+          <div
+            className={`absolute start-3 top-3 flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold text-white shadow-sm ${
+              !camera.is_running ? "bg-slate-600/90" : alerts > 0 ? "bg-red-600/95" : "bg-emerald-700/95"
+            }`}
+          >
             <span className={`size-1.5 rounded-full bg-white ${camera.is_running ? "animate-pulse" : "opacity-60"}`} />
             {!camera.is_running ? "متوقفة" : alerts > 0 ? `${alerts} تنبيه` : "تعمل"}
           </div>
@@ -701,7 +847,11 @@ function CameraCard({ camera, ppeLabels, allowStream, pending, alerts, onToggle,
         <div className="flex flex-1 flex-col p-5">
           <div className="mb-3">
             <h3 className="truncate text-base font-bold text-foreground transition-colors group-hover:text-primary">{camera.name}</h3>
-            <div dir="ltr" className="mt-1.5 inline-block max-w-full truncate rounded-lg bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground" title="تم إخفاء بيانات الدخول">
+            <div
+              dir="ltr"
+              className="mt-1.5 inline-block max-w-full truncate rounded-lg bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground"
+              title="تم إخفاء بيانات الدخول"
+            >
               {maskUri(camera.source_uri)}
             </div>
           </div>
@@ -721,14 +871,55 @@ function CameraCard({ camera, ppeLabels, allowStream, pending, alerts, onToggle,
               size="sm"
               variant={camera.is_running ? "destructive" : "default"}
               onClick={onToggle}
-              disabled={pending}
-              className={`flex-1 gap-1.5 rounded-xl text-xs font-bold ${!camera.is_running ? "bg-primary/12 text-primary hover:bg-primary hover:text-primary-foreground" : ""}`}
+              disabled={pending || deletePending}
+              className={`flex-1 gap-1.5 rounded-xl text-xs font-bold ${
+                !camera.is_running ? "bg-primary/12 text-primary hover:bg-primary hover:text-primary-foreground" : ""
+              }`}
             >
-              {pending ? <Loader2 className="size-3 animate-spin" /> : camera.is_running ? <Square size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}
+              {pending ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : camera.is_running ? (
+                <Square size={12} fill="currentColor" />
+              ) : (
+                <Play size={12} fill="currentColor" />
+              )}
               {camera.is_running ? "إيقاف" : "تشغيل"}
             </Button>
-            <Button type="button" size="icon" variant="ghost" aria-label={`مشاهدة ${camera.name}`} onClick={onWatch} className="shrink-0 rounded-xl text-muted-foreground hover:bg-primary/10 hover:text-primary">
+
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={`مشاهدة ${camera.name}`}
+              onClick={onWatch}
+              disabled={deletePending}
+              className="shrink-0 rounded-xl text-muted-foreground hover:bg-primary/10 hover:text-primary"
+            >
               <MonitorPlay size={16} />
+            </Button>
+
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={`تعديل ${camera.name}`}
+              onClick={onEdit}
+              disabled={deletePending}
+              className="shrink-0 rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Pencil size={16} />
+            </Button>
+
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              aria-label={`حذف ${camera.name}`}
+              onClick={onDelete}
+              disabled={deletePending}
+              className="shrink-0 rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            >
+              {deletePending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 size={16} />}
             </Button>
           </div>
         </div>
@@ -736,17 +927,21 @@ function CameraCard({ camera, ppeLabels, allowStream, pending, alerts, onToggle,
     </div>
   )
 }
+
 /* ─── Main App Component ─── */
 
 export default function App() {
   const isMobile = useMediaQuery("(max-width: 1023.98px)")
   const [dark, setDark] = useTheme()
 
-  const { data: health, isLoading: healthLoading } = useHealth()
-  const { data: cameras, isLoading: camerasLoading } = useCameras()
+  const { data: health, isLoading: healthLoading, isError: healthError, refetch: refetchHealth } = useHealth()
+  const { data: cameras, isLoading: camerasLoading, isError: camerasError, refetch: refetchCameras } = useCameras()
   const { data: ppeMeta } = usePPEClassesMeta()
+
   const startMut = useStartCamera()
   const stopMut = useStopCamera()
+  const deleteMut = useDeleteCamera()
+  const resolveMut = useResolveViolation()
 
   const [tab, setTab] = useState<TabKey>("overview")
   const [range, setRange] = useState<RangeKey>("24h")
@@ -762,6 +957,13 @@ export default function App() {
   const [camFilter, setCamFilter] = useState<number | "all">("all")
   const [page, setPage] = useState(1)
   const [addOpen, setAddOpen] = useState(false)
+
+  const [editOpen, setEditOpen] = useState(false)
+  const [editingCamera, setEditingCamera] = useState<Camera | null>(null)
+
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Camera | null>(null)
+
   const [bellOpen, setBellOpen] = useState(false)
   const [seenCount, setSeenCount] = useState<number | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
@@ -801,7 +1003,9 @@ export default function App() {
     const t = setTimeout(() => setTypeFilter(typeInput.trim()), 350)
     return () => clearTimeout(t)
   }, [typeInput])
-  useEffect(() => { setPage(1) }, [typeFilter, camFilter, showAllTypes, range])
+  useEffect(() => {
+    setPage(1)
+  }, [typeFilter, camFilter, showAllTypes, range])
 
   /* ─── الكاميرات ─── */
   const ppeLabels = useMemo(
@@ -823,10 +1027,19 @@ export default function App() {
     setSelectedCameraId((cameraList.find((c) => c.is_running) ?? cameraList[0]).id)
   }, [cameraList, selectedCameraId])
 
-  const selectedCamera = useMemo(
-    () => cameraList.find((c) => c.id === selectedCameraId) ?? null,
-    [cameraList, selectedCameraId],
-  )
+  /* لو الكاميرا المختارة اتحذفت/اختفت: نختار بديل تلقائيًا */
+  useEffect(() => {
+    if (selectedCameraId === null) return
+    if (cameraList.length === 0) {
+      setSelectedCameraId(null)
+      return
+    }
+    if (cameraList.some((c) => c.id === selectedCameraId)) return
+    setSelectedCameraId((cameraList.find((c) => c.is_running) ?? cameraList[0]).id)
+  }, [cameraList, selectedCameraId])
+
+  const selectedCamera = useMemo(() => cameraList.find((c) => c.id === selectedCameraId) ?? null, [cameraList, selectedCameraId])
+
   const filteredCams = useMemo(() => {
     const q = cameraSearch.trim().toLowerCase()
     if (!q) return cameraList
@@ -834,47 +1047,91 @@ export default function App() {
   }, [cameraList, cameraSearch])
 
   /* التحميل خاص بكل كاميرا لوحدها، مش بيقفل كل الأزرار */
-  const pendingCamId: number | null =
+  const togglingCamId: number | null =
     startMut.isPending ? (startMut.variables as number) : stopMut.isPending ? (stopMut.variables as number) : null
 
-  const toggleCamera = useCallback((c: Camera) => {
-    const mut = c.is_running ? stopMut : startMut
-    const verb = c.is_running ? "إيقاف" : "تشغيل"
-    mut.mutate(c.id, {
-      onSuccess: () => notify("success", `تم ${verb} «${c.name}» بنجاح`),
-      onError: () => notify("error", `تعذّر ${verb} «${c.name}». تحقق من مصدر الفيديو.`),
+  const deletingCamId: number | null = deleteMut.isPending ? (deleteMut.variables as number) : null
+  const resolvingViolationId: number | null = resolveMut.isPending ? (resolveMut.variables as number) : null
+
+  const toggleCamera = useCallback(
+    (c: Camera) => {
+      const mut = c.is_running ? stopMut : startMut
+      const verb = c.is_running ? "إيقاف" : "تشغيل"
+      mut.mutate(c.id, {
+        onSuccess: () => notify("success", `تم ${verb} «${c.name}» بنجاح`),
+        onError: () => notify("error", `تعذّر ${verb} «${c.name}». تحقق من مصدر الفيديو.`),
+      })
+    },
+    [startMut, stopMut, notify],
+  )
+
+  const selectCam = useCallback(
+    (id: number) => {
+      setSelectedCameraId(id)
+      setTab("live")
+      if (isMobile) setSidebarOpen(false)
+    },
+    [isMobile],
+  )
+
+  const openEdit = useCallback((c: Camera) => {
+    setEditingCamera(c)
+    setEditOpen(true)
+  }, [])
+
+  const askDelete = useCallback((c: Camera) => {
+    setDeleteTarget(c)
+    setDeleteOpen(true)
+  }, [])
+
+  const confirmDelete = useCallback(() => {
+    if (!deleteTarget) return
+    const c = deleteTarget
+    deleteMut.mutate(c.id, {
+      onSuccess: () => {
+        setDeleteOpen(false)
+        setDeleteTarget(null)
+        if (selectedCameraId === c.id) setSelectedCameraId(null)
+        notify("success", `تم حذف «${c.name}»`)
+      },
+      onError: () => notify("error", `تعذّر حذف «${c.name}»`),
     })
-  }, [startMut, stopMut, notify])
+  }, [deleteMut, deleteTarget, notify, selectedCameraId])
 
-  const selectCam = useCallback((id: number) => {
-    setSelectedCameraId(id)
-    setTab("live")
-    if (isMobile) setSidebarOpen(false)
-  }, [isMobile])
-
-  /* قفل Dialog الإضافة تلقائيًا أول ما عدد الكاميرات يزيد */
-  const prevTotal = useRef(totalCams)
-  useEffect(() => {
-    if (addOpen && totalCams > prevTotal.current) {
-      setAddOpen(false)
-      notify("success", "تمت إضافة الكاميرا بنجاح")
-    }
-    prevTotal.current = totalCams
-  }, [totalCams, addOpen, notify])
+  const resolveViolation = useCallback(
+    (v: Violation) => {
+      resolveMut.mutate(v.id, {
+        onSuccess: () => notify("success", "تم تعليم المخالفة كمعالجة"),
+        onError: () => notify("error", "تعذّر تعليم المخالفة كمعالجة"),
+      })
+    },
+    [resolveMut, notify],
+  )
 
   /* ─── المخالفات ─── */
-  const baseParams = useMemo(
-    () => ({ page_size: VIOLATIONS_FETCH_LIMIT, from: iso(from), to: iso(to) }),
-    [from, to],
+  const baseParams = useMemo(() => ({ page_size: VIOLATIONS_FETCH_LIMIT, from: iso(from), to: iso(to) }), [from, to])
+  const tableParams = useMemo(
+    () => ({
+      ...baseParams,
+      ...(camFilter !== "all" ? { camera_id: camFilter } : {}),
+      ...(typeFilter ? { violation_type: typeFilter } : {}),
+    }),
+    [baseParams, camFilter, typeFilter],
   )
-  const tableParams = useMemo(() => ({
-    ...baseParams,
-    ...(camFilter !== "all" ? { camera_id: camFilter } : {}),
-    ...(typeFilter ? { violation_type: typeFilter } : {}),
-  }), [baseParams, camFilter, typeFilter])
 
-  const { data: overviewData, isLoading: overviewLoading } = useViolations(baseParams)
-  const { data: violationsData, isLoading: loadingV } = useViolations(tableParams)
+  const {
+    data: overviewData,
+    //isLoading: overviewLoading,
+    isError: overviewError,
+    refetch: refetchOverview,
+  } = useViolations(baseParams)
+
+  const {
+    data: violationsData,
+    isLoading: loadingV,
+    isError: violationsError,
+    refetch: refetchViolations,
+  } = useViolations(tableParams)
 
   const byNewest = (a: Violation, b: Violation) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
 
@@ -916,9 +1173,10 @@ export default function App() {
     const start = from.getTime()
     const arr = Array.from({ length: buckets }, (_, i) => {
       const d = new Date(start + i * size)
-      const label = range === "24h"
-        ? d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", hour12: false })
-        : d.toLocaleDateString(LOCALE, { weekday: "short" })
+      const label =
+        range === "24h"
+          ? d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", hour12: false })
+          : d.toLocaleDateString(LOCALE, { weekday: "short" })
       return { label, count: 0 }
     })
     for (const v of overviewList) {
@@ -953,12 +1211,17 @@ export default function App() {
     const connect = () => {
       setLiveStatus(attempts ? "reconnecting" : "connecting")
       ws = new WebSocket(getWebSocketUrl(camId))
-      ws.onopen = () => { attempts = 0; setLiveStatus("open") }
+      ws.onopen = () => {
+        attempts = 0
+        setLiveStatus("open")
+      }
       ws.onmessage = (e) => {
         try {
           const d = JSON.parse(e.data)
           if (typeof d?.person_count === "number" || typeof d?.hardhat_count === "number") setCounts(d)
-        } catch { /* رسالة غير صالحة، نتجاهلها */ }
+        } catch {
+          /* رسالة غير صالحة، نتجاهلها */
+        }
       }
       ws.onerror = () => ws?.close()
       ws.onclose = () => {
@@ -977,13 +1240,16 @@ export default function App() {
 
   const compliance = selectedCamera?.is_running ? computeCompliance(counts) : undefined
   const liveWorkers = selectedCamera?.is_running ? counts.person_count : undefined
-  const camPending = selectedCamera !== null && pendingCamId === selectedCamera.id
+  const camPending = selectedCamera !== null && togglingCamId === selectedCamera.id
 
   /* ─── الجرس: يعدّ الجديد فقط منذ آخر مرة اتفتح ─── */
-  useEffect(() => { setSeenCount(null) }, [range])
+  useEffect(() => {
+    setSeenCount(null)
+  }, [range])
   useEffect(() => {
     if (seenCount === null && overviewData) setSeenCount(overviewData.items.length)
   }, [overviewData, seenCount])
+
   const unseen = seenCount === null ? 0 : Math.max(0, overviewList.length - seenCount)
   const toggleBell = () => {
     setBellOpen((o) => !o)
@@ -993,14 +1259,19 @@ export default function App() {
   /* Escape يقفل السايدبار والجرس */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setSidebarOpen(false); setBellOpen(false) }
+      if (e.key === "Escape") {
+        setSidebarOpen(false)
+        setBellOpen(false)
+      }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
   /* مفيش dialog فاضي: بيفتح بس لو فيه صورة */
-  const openFrame = (url?: string | null) => { if (url) setFrameUrl(url) }
+  const openFrame = (url?: string | null) => {
+    if (url) setFrameUrl(url)
+  }
 
   const navItems: { id: TabKey; icon: ReactNode; badge?: number }[] = [
     { id: "overview", icon: <LayoutGrid className="size-4" /> },
@@ -1010,13 +1281,10 @@ export default function App() {
   ]
 
   const sidebarHidden = isMobile && !sidebarOpen
-  const serverOk = Boolean(health?.model_loaded)
+  const serverOk = Boolean(health?.model_loaded) && !healthError
 
   /* ترتيب الكاميرات في تاب الإدارة: الشغالة أولًا، وأول 4 منها بس بيفتحوا بث معاينة */
-  const orderedCams = useMemo(
-    () => [...cameraList].sort((a, b) => Number(b.is_running) - Number(a.is_running)),
-    [cameraList],
-  )
+  const orderedCams = useMemo(() => [...cameraList].sort((a, b) => Number(b.is_running) - Number(a.is_running)), [cameraList])
   const previewAllowed = useMemo(() => {
     const ids = new Set<number>()
     for (const c of orderedCams) {
@@ -1036,16 +1304,20 @@ export default function App() {
     return m
   }, [overviewList, now])
   const hourAlerts = useMemo(() => [...alertsByCam.values()].reduce((a, b) => a + b, 0), [alertsByCam])
+
   const headline =
-    compliance === undefined ? "شغّل كاميرا لبدء قياس الالتزام"
-      : compliance >= 90 ? "الموقع ملتزم بمعدات الوقاية"
-        : compliance >= 70 ? "الالتزام يحتاج متابعة"
+    compliance === undefined
+      ? "شغّل كاميرا لبدء قياس الالتزام"
+      : compliance >= 90
+        ? "الموقع ملتزم بمعدات الوقاية"
+        : compliance >= 70
+          ? "الالتزام يحتاج متابعة"
           : "الالتزام منخفض، تدخّل الآن"
+
   const crumbs = tab === "live" && selectedCamera ? [TAB_TITLES.live, selectedCamera.name] : [TAB_TITLES[tab]]
 
   return (
     <div className="flex min-h-dvh w-full bg-background text-foreground" dir="rtl" lang="ar">
-
       {/* ─── Sidebar ─── */}
       <aside
         id="app-sidebar"
@@ -1079,7 +1351,10 @@ export default function App() {
                 label={TAB_TITLES[item.id]}
                 active={tab === item.id}
                 badge={item.badge}
-                onClick={() => { setTab(item.id); if (isMobile) setSidebarOpen(false) }}
+                onClick={() => {
+                  setTab(item.id)
+                  if (isMobile) setSidebarOpen(false)
+                }}
               />
             ))}
           </div>
@@ -1096,6 +1371,10 @@ export default function App() {
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <Loader2 className="size-3.5 animate-spin" /> جارٍ الفحص...
               </span>
+            ) : healthError ? (
+              <button type="button" onClick={() => refetchHealth()} className="flex items-center gap-1.5 font-bold text-destructive-foreground">
+                <WifiOff className="size-3.5" /> غير متصل
+              </button>
             ) : (
               <span className={`flex items-center gap-1.5 font-bold ${serverOk ? "text-success-foreground" : "text-destructive-foreground"}`}>
                 {serverOk ? <Wifi className="size-3.5" /> : <WifiOff className="size-3.5" />}
@@ -1103,6 +1382,7 @@ export default function App() {
               </span>
             )}
           </div>
+
           {health && (
             <div className="space-y-2 text-[11px] text-muted-foreground">
               <div className="flex justify-between">
@@ -1138,7 +1418,12 @@ export default function App() {
       </aside>
 
       {isMobile && sidebarOpen && (
-        <button type="button" aria-label="إغلاق القائمة" className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
+        <button
+          type="button"
+          aria-label="إغلاق القائمة"
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm"
+          onClick={() => setSidebarOpen(false)}
+        />
       )}
 
       {/* ─── Main Content ─── */}
@@ -1211,14 +1496,22 @@ export default function App() {
                   <button type="button" aria-label="إغلاق التنبيهات" className="fixed inset-0 z-40 cursor-default" onClick={() => setBellOpen(false)} />
                   <div className="card-premium absolute left-0 top-12 z-50 w-80 max-w-[90vw] animate-fade-in overflow-hidden rounded-2xl border border-border/60 p-2">
                     <p className="px-3 py-2 text-xs font-bold text-muted-foreground">آخر التنبيهات</p>
-                    {overviewList.length === 0 ? (
+
+                    {overviewError && !overviewRaw ? (
+                      <div className="px-3 pb-3">
+                        <ErrorState compact title="تعذّر تحميل التنبيهات" onRetry={() => refetchOverview()} />
+                      </div>
+                    ) : overviewList.length === 0 ? (
                       <p className="px-3 pb-3 text-sm text-muted-foreground">لا توجد تنبيهات في {rangeLabel}.</p>
                     ) : (
                       overviewList.slice(0, 5).map((v) => (
                         <button
                           key={v.id}
                           type="button"
-                          onClick={() => { setBellOpen(false); openFrame(v.frame_url) }}
+                          onClick={() => {
+                            setBellOpen(false)
+                            openFrame(v.frame_url)
+                          }}
                           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-start transition-colors hover:bg-muted/40"
                         >
                           <span className="size-2 shrink-0 rounded-full bg-destructive" />
@@ -1227,9 +1520,13 @@ export default function App() {
                         </button>
                       ))
                     )}
+
                     <button
                       type="button"
-                      onClick={() => { setBellOpen(false); setTab("violations") }}
+                      onClick={() => {
+                        setBellOpen(false)
+                        setTab("violations")
+                      }}
                       className="mt-1 w-full rounded-xl px-3 py-2 text-center text-xs font-bold text-primary hover:bg-primary/10"
                     >
                       عرض السجل الكامل
@@ -1246,11 +1543,9 @@ export default function App() {
         </header>
 
         <div key={tab} className="flex-1 animate-page-in overflow-y-auto p-5 lg:p-10">
-
           {/* ===================== OVERVIEW ===================== */}
           {tab === "overview" && (
             <div className="mx-auto max-w-7xl space-y-12">
-
               <div>
                 <h2 className="text-3xl font-bold leading-tight">{headline}</h2>
                 <p className="mt-2 text-sm text-muted-foreground">ملخص الالتزام والتنبيهات خلال {rangeLabel}</p>
@@ -1265,41 +1560,40 @@ export default function App() {
                   />
                 </div>
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:col-span-8 lg:gap-8">
-                <StatCard
-                  label="عمال تحت المراقبة الآن"
-                  value={liveWorkers}
-                  icon={<Users className="size-5 stroke-[2.5]" />}
-                  tone="info"
-                  live={liveStatus === "open"}
-                  hint={selectedCamera?.is_running ? `${counts.hardhat_count ?? 0} خوذة · ${counts.vest_count ?? 0} سترة` : "لا يوجد بث نشط"}
-                />
-                <StatCard
-                  label={`مخالفات ${rangeLabel}`}
-                  value={overviewLoading && !overviewRaw ? undefined : overviewList.length}
-                  plus={overviewCapped}
-                  icon={<ShieldAlert className="size-5 stroke-[2.5]" />}
-                  tone="warning"
-                  hint={`${coreCount} منها تخص معدات الوقاية الأساسية`}
-                />
-                <StatCard
-                  label="كاميرات تعمل الآن"
-                  value={camerasLoading ? undefined : runningCount}
-                  icon={<Cctv className="size-5 stroke-[2.5]" />}
-                  tone="primary"
-                  hint={`من ${totalCams} كاميرا مُسجّلة`}
-                />
-                <StatCard
-                  label="تنبيهات آخر ساعة"
-                  value={overviewLoading && !overviewRaw ? undefined : hourAlerts}
-                  icon={<AlertTriangle className="size-5 stroke-[2.5]" />}
-                  tone="destructive"
-                  hint={alertsByCam.size > 0 ? `على ${alertsByCam.size} كاميرا` : "لا توجد تنبيهات نشطة"}
-                />
+                  <StatCard
+                    label="عمال تحت المراقبة الآن"
+                    value={liveWorkers}
+                    icon={<Users className="size-5 stroke-[2.5]" />}
+                    tone="info"
+                    live={liveStatus === "open"}
+                    hint={selectedCamera?.is_running ? `${counts.hardhat_count ?? 0} خوذة · ${counts.vest_count ?? 0} سترة` : "لا يوجد بث نشط"}
+                  />
+                  <StatCard
+                    label={`مخالفات ${rangeLabel}`}
+                    value={overviewRaw ? overviewList.length : undefined}
+                    plus={overviewCapped}
+                    icon={<ShieldAlert className="size-5 stroke-[2.5]" />}
+                    tone="warning"
+                    hint={overviewRaw ? `${coreCount} منها تخص معدات الوقاية الأساسية` : "—"}
+                  />
+                  <StatCard
+                    label="كاميرات تعمل الآن"
+                    value={camerasLoading && cameraList.length === 0 ? undefined : runningCount}
+                    icon={<Cctv className="size-5 stroke-[2.5]" />}
+                    tone="primary"
+                    hint={`من ${totalCams} كاميرا مُسجّلة`}
+                  />
+                  <StatCard
+                    label="تنبيهات آخر ساعة"
+                    value={overviewRaw ? hourAlerts : undefined}
+                    icon={<AlertTriangle className="size-5 stroke-[2.5]" />}
+                    tone="destructive"
+                    hint={overviewRaw ? (alertsByCam.size > 0 ? `على ${alertsByCam.size} كاميرا` : "لا توجد تنبيهات نشطة") : "—"}
+                  />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-
                 <Card className="flex h-[420px] flex-col p-7 lg:col-span-2">
                   <div className="mb-6 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -1318,7 +1612,15 @@ export default function App() {
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 4" stroke="var(--chart-grid)" vertical={false} />
-                        <XAxis dataKey="label" tickLine={false} axisLine={false} stroke="var(--chart-axis)" fontSize={11} interval="preserveStartEnd" minTickGap={28} />
+                        <XAxis
+                          dataKey="label"
+                          tickLine={false}
+                          axisLine={false}
+                          stroke="var(--chart-axis)"
+                          fontSize={11}
+                          interval="preserveStartEnd"
+                          minTickGap={28}
+                        />
                         <YAxis allowDecimals={false} tickLine={false} axisLine={false} stroke="var(--chart-axis)" fontSize={11} />
                         <Tooltip
                           contentStyle={tooltipStyle()}
@@ -1333,7 +1635,6 @@ export default function App() {
                 </Card>
 
                 <Card className="relative flex h-[420px] flex-col overflow-hidden p-7">
-
                   <div className="relative z-10 mb-4 flex items-center gap-3">
                     <div className="h-7 w-1.5 rounded-full bg-warning" />
                     <h3 className="text-base font-semibold">توزيع أنواع المخالفات</h3>
@@ -1341,21 +1642,46 @@ export default function App() {
 
                   {pieData.length === 0 ? (
                     <div className="relative z-10 flex flex-1 items-center justify-center">
-                      <EmptyState compact icon={<ShieldCheck className="size-6 text-success" />} title="الموقع ملتزم" desc={`لم يُسجَّل أي انتهاك في ${rangeLabel}. استمر على هذا المستوى.`} />
+                      {overviewError && !overviewRaw ? (
+                        <ErrorState compact title="تعذّر تحميل بيانات المخالفات" onRetry={() => refetchOverview()} />
+                      ) : (
+                        <EmptyState
+                          compact
+                          icon={<ShieldCheck className="size-6 text-success" />}
+                          title="الموقع ملتزم"
+                          desc={`لم يُسجَّل أي انتهاك في ${rangeLabel}. استمر على هذا المستوى.`}
+                        />
+                      )}
                     </div>
                   ) : (
                     <>
                       <div className="relative z-10 min-h-0 flex-1">
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
-                            <Pie data={pieData} cx="50%" cy="50%" innerRadius={58} outerRadius={82} paddingAngle={4} dataKey="value" cornerRadius={8} animationDuration={900} stroke="none">
-                              {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                            <Pie
+                              data={pieData}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={58}
+                              outerRadius={82}
+                              paddingAngle={4}
+                              dataKey="value"
+                              cornerRadius={8}
+                              animationDuration={900}
+                              stroke="none"
+                            >
+                              {pieData.map((_, i) => (
+                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                              ))}
                             </Pie>
                             <Tooltip contentStyle={tooltipStyle()} formatter={countFormatter} />
                           </PieChart>
                         </ResponsiveContainer>
                         <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
-                          <div className="text-3xl font-bold tabular-nums">{overviewList.length}{overviewCapped && "+"}</div>
+                          <div className="text-3xl font-bold tabular-nums">
+                            {overviewList.length}
+                            {overviewCapped && "+"}
+                          </div>
                           <div className="mt-0.5 text-[11px] font-bold text-muted-foreground">إجمالي الحالات</div>
                         </div>
                       </div>
@@ -1378,16 +1704,26 @@ export default function App() {
               <Card className="overflow-hidden">
                 <div className="flex items-center justify-between border-b border-border/40 bg-card/80 p-5 pb-4">
                   <div className="flex items-center gap-2.5">
-                    <div className="rounded-lg bg-destructive/15 p-1.5"><ShieldAlert className="size-4 text-destructive" /></div>
+                    <div className="rounded-lg bg-destructive/15 p-1.5">
+                      <ShieldAlert className="size-4 text-destructive" />
+                    </div>
                     <h3 className="text-sm font-bold">آخر التنبيهات المسجلة</h3>
                   </div>
-                  <button type="button" onClick={() => setTab("violations")} className="flex items-center gap-1 text-[11px] font-bold text-primary underline-offset-2 hover:underline">
+                  <button
+                    type="button"
+                    onClick={() => setTab("violations")}
+                    className="flex items-center gap-1 text-[11px] font-bold text-primary underline-offset-2 hover:underline"
+                  >
                     عرض السجل الكامل <ArrowLeft className="size-3" />
                   </button>
                 </div>
 
                 <div className="max-h-[380px] divide-y divide-border/70 overflow-y-auto">
-                  {overviewList.length === 0 ? (
+                  {overviewError && !overviewRaw ? (
+                    <div className="p-4">
+                      <ErrorState compact title="تعذّر تحميل التنبيهات" onRetry={() => refetchOverview()} />
+                    </div>
+                  ) : overviewList.length === 0 ? (
                     <EmptyState
                       compact
                       icon={<ShieldCheck className="size-6 text-success" />}
@@ -1429,7 +1765,9 @@ export default function App() {
                             </span>
                           </div>
                         </div>
-                        {v.frame_url && <ArrowLeft className="size-4 text-muted-foreground/25 transition-all duration-300 group-hover:-translate-x-1 group-hover:text-primary" />}
+                        {v.frame_url && (
+                          <ArrowLeft className="size-4 text-muted-foreground/25 transition-all duration-300 group-hover:-translate-x-1 group-hover:text-primary" />
+                        )}
                       </button>
                     ))
                   )}
@@ -1437,10 +1775,10 @@ export default function App() {
               </Card>
             </div>
           )}
+
           {/* ===================== LIVE ===================== */}
           {tab === "live" && (
             <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 lg:h-[calc(100dvh-8rem)] lg:grid-cols-12">
-
               {/* قائمة الكاميرات + الأرقام اللحظية */}
               <div className="flex flex-col gap-4 lg:col-span-3 lg:h-full lg:min-h-0">
                 <Card className="flex max-h-[45vh] flex-1 flex-col overflow-hidden p-4 lg:max-h-none">
@@ -1456,14 +1794,28 @@ export default function App() {
                   </div>
 
                   <div className="flex-1 space-y-2 overflow-y-auto pe-1">
-                    {cameraList.length === 0 && !camerasLoading ? (
+                    {camerasError && cameraList.length === 0 ? (
+                      <ErrorState compact title="تعذّر تحميل الكاميرات" onRetry={() => refetchCameras()} />
+                    ) : camerasLoading && cameraList.length === 0 ? (
+                      <div className="py-10 text-center text-sm text-muted-foreground">
+                        <Loader2 className="mx-auto mb-2 size-4 animate-spin" />
+                        جارٍ تحميل الكاميرات...
+                      </div>
+                    ) : cameraList.length === 0 ? (
                       <EmptyState
                         compact
                         icon={<CameraIcon className="size-6 text-primary" />}
                         title="لا توجد كاميرات بعد"
                         desc="اربط أول كاميرا وابدأ المراقبة الذكية خلال دقيقة."
                         action={
-                          <button type="button" className="btn-cta text-sm" onClick={() => { setTab("cameras"); setAddOpen(true) }}>
+                          <button
+                            type="button"
+                            className="btn-cta text-sm"
+                            onClick={() => {
+                              setTab("cameras")
+                              setAddOpen(true)
+                            }}
+                          >
                             <Plus className="size-4" /> أضف أول كاميرا
                           </button>
                         }
@@ -1484,7 +1836,9 @@ export default function App() {
                               isSelected ? "border-primary/30 bg-primary/12 shadow-md shadow-primary/5" : "border-transparent hover:bg-muted/40"
                             }`}
                           >
-                            <span className="mt-1.5"><LiveDot tone="success" active={c.is_running} /></span>
+                            <span className="mt-1.5">
+                              <LiveDot tone="success" active={c.is_running} />
+                            </span>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="truncate text-sm font-bold text-foreground transition-colors group-hover:text-primary">{c.name}</span>
@@ -1499,7 +1853,10 @@ export default function App() {
                               {classes.length > 0 && (
                                 <div className="mt-2.5 flex flex-wrap gap-1">
                                   {classes.slice(0, 3).map((k) => (
-                                    <span key={k} className="rounded-md border border-border/20 bg-secondary/50 px-1.5 py-0.5 text-[9px] font-medium text-secondary-foreground">
+                                    <span
+                                      key={k}
+                                      className="rounded-md border border-border/20 bg-secondary/50 px-1.5 py-0.5 text-[9px] font-medium text-secondary-foreground"
+                                    >
                                       {ppeLabels.get(k) ?? k}
                                     </span>
                                   ))}
@@ -1522,9 +1879,7 @@ export default function App() {
                       </div>
                       <div className="mt-1 text-[11px] font-bold text-muted-foreground">نسبة الالتزام بالخوذة</div>
                       {!selectedCamera.is_running && <div className="mt-1 text-[11px] text-muted-foreground">شغّل الكاميرا لعرض البيانات</div>}
-                      {selectedCamera.is_running && compliance === undefined && liveStatus === "open" && (
-                        <div className="mt-1 text-[11px] text-muted-foreground">لا يوجد أشخاص في الكادر الآن</div>
-                      )}
+                      {selectedCamera.is_running && compliance === undefined && liveStatus === "open" && <div className="mt-1 text-[11px] text-muted-foreground">لا يوجد أشخاص في الكادر الآن</div>}
                     </Card>
                     <SideMetric icon={<Users className="size-4 text-info" />} value={selectedCamera.is_running ? counts.person_count : undefined} label="أشخاص" />
                     <SideMetric icon={<HardHat className="size-4 text-warning" />} value={selectedCamera.is_running ? counts.hardhat_count : undefined} label="خوذات" />
@@ -1555,14 +1910,11 @@ export default function App() {
           {/* ===================== CAMERAS ===================== */}
           {tab === "cameras" && (
             <div className="mx-auto max-w-7xl space-y-6">
-
               <div className="card-premium flex flex-col justify-between gap-4 rounded-2xl border border-border/60 p-6 sm:flex-row sm:items-center">
                 <div>
                   <h2 className="text-2xl font-bold text-foreground">إدارة مصادر الفيديو</h2>
                   <p className="mt-1.5 text-sm text-muted-foreground">اربط كاميرات RTSP وتحكم في تشغيلها وإيقافها من مكان واحد.</p>
-                  {runningCount > MAX_GRID_PREVIEWS && (
-                    <p className="mt-2 text-[11px] text-muted-foreground">تُعرض معاينة حية لأول {MAX_GRID_PREVIEWS} كاميرات فقط للحفاظ على الأداء.</p>
-                  )}
+                  {runningCount > MAX_GRID_PREVIEWS && <p className="mt-2 text-[11px] text-muted-foreground">تُعرض معاينة حية لأول {MAX_GRID_PREVIEWS} كاميرات فقط للحفاظ على الأداء.</p>}
                 </div>
 
                 <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -1574,12 +1926,19 @@ export default function App() {
                       <DialogTitle className="font-bold text-foreground">ربط كاميرا جديدة بالنظام</DialogTitle>
                       <DialogDescription>أدخل رابط المصدر واختر معدات الوقاية المطلوب رصدها.</DialogDescription>
                     </DialogHeader>
-                    <AddCameraForm />
+                    <AddCameraForm
+                      onSuccess={() => {
+                        setAddOpen(false)
+                        notify("success", "تمت إضافة الكاميرا بنجاح")
+                      }}
+                    />
                   </DialogContent>
                 </Dialog>
               </div>
 
-              {camerasLoading && cameraList.length === 0 ? (
+              {camerasError && cameraList.length === 0 ? (
+                <ErrorState title="تعذّر تحميل الكاميرات" onRetry={() => refetchCameras()} />
+              ) : camerasLoading && cameraList.length === 0 ? (
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                   {Array.from({ length: 4 }, (_, i) => (
                     <div key={i} className="card-premium overflow-hidden rounded-2xl border border-border/60">
@@ -1611,10 +1970,13 @@ export default function App() {
                       camera={c}
                       ppeLabels={ppeLabels}
                       allowStream={previewAllowed.has(c.id)}
-                      pending={pendingCamId === c.id}
+                      pending={togglingCamId === c.id}
+                      deletePending={deletingCamId === c.id}
                       alerts={alertsByCam.get(c.id) ?? 0}
                       onToggle={() => toggleCamera(c)}
                       onWatch={() => selectCam(c.id)}
+                      onEdit={() => openEdit(c)}
+                      onDelete={() => askDelete(c)}
                     />
                   ))}
                 </div>
@@ -1625,10 +1987,11 @@ export default function App() {
           {/* ===================== VIOLATIONS ===================== */}
           {tab === "violations" && (
             <div className="mx-auto max-w-7xl space-y-6">
-
               <div className="card-premium flex flex-col justify-between gap-4 rounded-2xl border border-border/60 p-5 lg:flex-row lg:items-center">
                 <div className="flex items-center gap-3">
-                  <div className="rounded-xl bg-destructive/15 p-2"><ShieldAlert className="size-5 text-destructive" /></div>
+                  <div className="rounded-xl bg-destructive/15 p-2">
+                    <ShieldAlert className="size-5 text-destructive" />
+                  </div>
                   <div>
                     <h2 className="text-lg font-bold leading-tight text-foreground">سجل الحوادث والمخالفات</h2>
                     <p className="mt-0.5 text-xs text-muted-foreground">كل الانتهاكات المرصودة تلقائيًا في {rangeLabel}</p>
@@ -1644,7 +2007,11 @@ export default function App() {
                       onChange={(e) => setCamFilter(e.target.value === "all" ? "all" : Number(e.target.value))}
                     >
                       <option value="all">جميع الكاميرات ({totalCams})</option>
-                      {cameraList.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      {cameraList.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
                     </select>
                     <ChevronDown className="pointer-events-none absolute end-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   </div>
@@ -1657,7 +2024,11 @@ export default function App() {
                       onChange={(e) => setTypeInput(e.target.value)}
                     >
                       <option value="">كل الأنواع</option>
-                      {knownTypes.map((t) => <option key={t} value={t}>{violationLabel(t, ppeLabels)}</option>)}
+                      {knownTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {violationLabel(t, ppeLabels)}
+                        </option>
+                      ))}
                     </select>
                     <ChevronDown className="pointer-events-none absolute end-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   </div>
@@ -1682,28 +2053,42 @@ export default function App() {
                         <th className="p-4 text-start">نوع المخالفة</th>
                         <th className="p-4 text-start">الكاميرا</th>
                         <th className="p-4 text-start">ثقة الكشف</th>
-                        <th className="p-4 text-end"><span className="sr-only">إجراءات</span></th>
+                        <th className="p-4 text-start">الحالة</th>
+                        <th className="p-4 text-end">
+                          <span className="sr-only">إجراءات</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/70">
-
-                      {loadingV && !violationsRaw && Array.from({ length: 5 }, (_, i) => (
-                        <tr key={i}>
-                          <td colSpan={6} className="p-4">
-                            <div className="flex items-center gap-4">
-                              <div className="skeleton-shimmer h-10 w-14 rounded-xl" />
-                              <div className="flex-1 space-y-2">
-                                <div className="skeleton-shimmer h-4 w-48 rounded" />
-                                <div className="skeleton-shimmer h-3 w-24 rounded" />
-                              </div>
-                            </div>
+                      {violationsError && !violationsRaw && (
+                        <tr>
+                          <td colSpan={7} className="p-6">
+                            <ErrorState compact title="تعذّر تحميل المخالفات" onRetry={() => refetchViolations()} />
                           </td>
                         </tr>
-                      ))}
+                      )}
 
-                      {!loadingV && filteredList.length === 0 && (
+                      {loadingV && !violationsRaw && !violationsError && (
+                        <>
+                          {Array.from({ length: 5 }, (_, i) => (
+                            <tr key={i}>
+                              <td colSpan={7} className="p-4">
+                                <div className="flex items-center gap-4">
+                                  <div className="skeleton-shimmer h-10 w-14 rounded-xl" />
+                                  <div className="flex-1 space-y-2">
+                                    <div className="skeleton-shimmer h-4 w-48 rounded" />
+                                    <div className="skeleton-shimmer h-3 w-24 rounded" />
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </>
+                      )}
+
+                      {!loadingV && !violationsError && filteredList.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="p-6">
+                          <td colSpan={7} className="p-6">
                             <EmptyState
                               compact
                               icon={<ShieldCheck className="size-6 text-success" />}
@@ -1717,6 +2102,8 @@ export default function App() {
                       {pageItems.map((v) => {
                         const conf = Math.min(100, Math.max(0, Math.round(v.confidence * 100)))
                         const barColor = conf >= 85 ? "bg-success" : conf >= 60 ? "bg-warning" : "bg-destructive"
+                        const resolvePending = resolvingViolationId === v.id
+
                         return (
                           <tr key={v.id} className="group transition-colors hover:bg-muted/60">
                             <td className="p-4">
@@ -1728,9 +2115,16 @@ export default function App() {
                                 className="block overflow-hidden rounded-xl border border-border/50 transition-all hover:border-primary/40 hover:shadow-md hover:shadow-primary/10 disabled:cursor-default disabled:hover:border-border/50 disabled:hover:shadow-none"
                               >
                                 {v.frame_url ? (
-                                  <img src={v.frame_url} loading="lazy" alt="" className="h-10 w-14 object-cover transition-transform duration-300 group-hover:scale-110" />
+                                  <img
+                                    src={v.frame_url}
+                                    loading="lazy"
+                                    alt=""
+                                    className="h-10 w-14 object-cover transition-transform duration-300 group-hover:scale-110"
+                                  />
                                 ) : (
-                                  <div className="flex h-10 w-14 items-center justify-center bg-secondary text-muted-foreground"><ImageIcon size={16} /></div>
+                                  <div className="flex h-10 w-14 items-center justify-center bg-secondary text-muted-foreground">
+                                    <ImageIcon size={16} />
+                                  </div>
                                 )}
                               </button>
                             </td>
@@ -1752,17 +2146,44 @@ export default function App() {
                                 <span className="w-9 text-xs font-bold tabular-nums text-foreground">{conf}%</span>
                               </div>
                             </td>
+
+                            <td className="p-4">
+                              {v.is_resolved ? (
+                                <Badge variant="secondary" className="rounded-md text-[11px] font-bold">
+                                  تمت المعالجة
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="rounded-md border-destructive/30 text-[11px] font-bold text-destructive">
+                                  جديدة
+                                </Badge>
+                              )}
+                            </td>
+
                             <td className="p-4 text-end">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                disabled={!v.frame_url}
-                                onClick={() => openFrame(v.frame_url)}
-                                className="h-8 gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-primary-light hover:text-primary"
-                              >
-                                <Eye size={14} /> عرض
-                              </Button>
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={!v.frame_url}
+                                  onClick={() => openFrame(v.frame_url)}
+                                  className="h-8 gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-primary-light hover:text-primary"
+                                >
+                                  <Eye size={14} /> عرض
+                                </Button>
+
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={v.is_resolved || resolvePending}
+                                  onClick={() => resolveViolation(v)}
+                                  className="h-8 gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-success/10 hover:text-success-foreground disabled:opacity-50"
+                                >
+                                  {resolvePending ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck size={14} />}
+                                  {v.is_resolved ? "مُعالجة" : "تعليم كمعالجة"}
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         )
@@ -1775,13 +2196,17 @@ export default function App() {
                   <span className="tabular-nums">
                     {filteredList.length === 0
                       ? "لا توجد سجلات"
-                      : `عرض ${(safePage - 1) * TABLE_PAGE_SIZE + 1} إلى ${Math.min(safePage * TABLE_PAGE_SIZE, filteredList.length)} من ${filteredList.length}${(violationsRaw?.items.length ?? 0) >= VIOLATIONS_FETCH_LIMIT ? "+" : ""} سجل`}
+                      : `عرض ${(safePage - 1) * TABLE_PAGE_SIZE + 1} إلى ${Math.min(safePage * TABLE_PAGE_SIZE, filteredList.length)} من ${filteredList.length}${
+                          (violationsRaw?.items.length ?? 0) >= VIOLATIONS_FETCH_LIMIT ? "+" : ""
+                        } سجل`}
                   </span>
                   <div className="flex items-center gap-2">
                     <Button type="button" variant="outline" size="sm" className="h-7 rounded-lg text-[11px]" disabled={safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
                       السابق
                     </Button>
-                    <span className="tabular-nums">صفحة {safePage} من {pageCount}</span>
+                    <span className="tabular-nums">
+                      صفحة {safePage} من {pageCount}
+                    </span>
                     <Button type="button" variant="outline" size="sm" className="h-7 rounded-lg text-[11px]" disabled={safePage >= pageCount} onClick={() => setPage((p) => Math.min(pageCount, p + 1))}>
                       التالي
                     </Button>
@@ -1790,9 +2215,55 @@ export default function App() {
               </Card>
             </div>
           )}
-
         </div>
       </main>
+
+      {/* ─── Edit Camera Modal ─── */}
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditOpen(false)
+            setEditingCamera(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg rounded-2xl border-border bg-card">
+          <DialogHeader>
+            <DialogTitle className="font-bold text-foreground">تعديل الكاميرا</DialogTitle>
+            <DialogDescription>يمكنك تعديل الاسم والرابط والفئات المفعّلة.</DialogDescription>
+          </DialogHeader>
+          {editingCamera && (
+            <AddCameraForm
+              key={editingCamera.id}
+              mode="edit"
+              camera={editingCamera}
+              onSuccess={() => {
+                setEditOpen(false)
+                setEditingCamera(null)
+                notify("success", "تم تحديث الكاميرا بنجاح")
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── Delete Confirm ─── */}
+      <ConfirmDialog
+        open={deleteOpen}
+        title="تأكيد حذف الكاميرا"
+        description={deleteTarget ? `هل أنت متأكد أنك تريد حذف «${deleteTarget.name}»؟` : undefined}
+        confirmLabel="حذف"
+        cancelLabel="إلغاء"
+        tone="destructive"
+        pending={deleteMut.isPending}
+        onCancel={() => {
+          if (deleteMut.isPending) return
+          setDeleteOpen(false)
+          setDeleteTarget(null)
+        }}
+        onConfirm={confirmDelete}
+      />
 
       {/* ─── Frame Modal ─── */}
       <Dialog open={frameUrl !== null} onOpenChange={(open) => { if (!open) setFrameUrl(null) }}>

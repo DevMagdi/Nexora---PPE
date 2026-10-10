@@ -11,6 +11,7 @@ import {
   startCamera,
   stopCamera,
   getViolations,
+  resolveViolation,
 } from "@/lib/api"
 import type { CameraCreatePayload, CameraUpdatePayload } from "@/types"
 
@@ -49,7 +50,6 @@ export function usePPEClassesMeta() {
   })
 }
 
-// بيرجع items بس (array) — ده اللي غالبًا محتاجه الـ UI
 export function usePPEClasses() {
   return useQuery({
     queryKey: queryKeys.ppeClasses,
@@ -138,5 +138,17 @@ export function useViolations(params?: {
     queryKey: queryKeys.violations(params as any),
     queryFn: () => getViolations(params),
     refetchInterval: 5000,
+  })
+}
+
+// ✅ جديد: تأكيد معالجة المخالفة. بنعمل invalidate لكل queries المخالفات
+// (بغض النظر عن الفلاتر) عشان الشاشة تتحدث فورًا أيًا كان التاب المفتوح.
+export function useResolveViolation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => resolveViolation(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["violations"] })
+    },
   })
 }

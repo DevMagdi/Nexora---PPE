@@ -21,7 +21,12 @@ def _to_response(cam: Camera, manager: CameraManager) -> CameraResponse:
     )
 
 
-@router.get("", response_model=list[CameraResponse])
+# ✅ الـ GET endpoints بقت محمية كمان بالـ API Key. السبب: source_uri
+# بيحتوي أحيانًا على username/password لو كان RTSP (rtsp://user:pass@ip).
+# الفرونت إند بيبعت الهيدر تلقائيًا مع كل الطلبات، فده مش هيكسر أي حاجة
+# في الواجهة، لكنه بيمنع أي طرف خارجي من قراءة بيانات الكاميرات
+# من غير المفتاح الصحيح.
+@router.get("", response_model=list[CameraResponse], dependencies=[Depends(require_api_key)])
 async def list_cameras(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -57,7 +62,11 @@ async def create_camera(
     return _to_response(cam, manager)
 
 
-@router.get("/{camera_id}", response_model=CameraResponse)
+@router.get(
+    "/{camera_id}",
+    response_model=CameraResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def get_camera(
     camera_id: int,
     request: Request,
@@ -134,7 +143,6 @@ async def start_camera(
     try:
         ok = await manager.start_camera(camera_id, cam.source_type, cam.source_uri, cam.enabled_classes)
     except ValueError as e:
-        # بدل 500: رجّع 400 برسالة مفهومة
         raise HTTPException(status_code=400, detail=str(e))
 
     if not ok:

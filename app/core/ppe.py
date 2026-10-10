@@ -10,10 +10,9 @@ PPE_CLASS_MAP: dict[str, dict[str, Optional[str]]] = {
     "mask": {"label": "Mask", "positive": "Mask", "negative": "NO-Mask"},
 
     # Coming soon (الموديل الحالي غالبًا لا يدعمهم)
-    "gloves": {"label": "Gloves", "positive": "Gloves", "negative": None},
-    "boots": {"label": "Safety Boots", "positive": "Safety Boots", "negative": None},
-    "goggles": {"label": "Goggles", "positive": "Goggles", "negative": None},
-    "coat": {"label": "Lab Coat", "positive": "Lab Coat", "negative": None},
+    "gloves": {"label": "Gloves", "positive": "Gloves", "negative": "NO-Gloves"},
+    "boots": {"label": "Safety Boots", "positive": "Safety Boots", "negative": "NO-Safety Boots"},
+    "goggles": {"label": "Goggles", "positive": "Goggles", "negative": "NO-Goggles"},
 }
 
 ALLOWED_PPE_KEYS: list[str] = list(PPE_CLASS_MAP.keys())
@@ -29,7 +28,7 @@ PPE_LABELS: dict[str, dict[str, str]] = {
     "gloves": {"label_ar": "جوانتي", "label_en": "Gloves"},
     "boots": {"label_ar": "حذاء واقي", "label_en": "Safety Boots"},
     "goggles": {"label_ar": "نظارات واقية", "label_en": "Goggles"},
-    "coat": {"label_ar": "بالطو / أوفرول", "label_en": "Lab Coat / Coverall"},
+    #"coat": {"label_ar": "بالطو / أوفرول", "label_en": "Lab Coat / Coverall"},
 }
 
 

@@ -52,6 +52,8 @@ export type Violation = {
   violation_type: string
   confidence: number
   timestamp: string
+  resolved_at?: string | null
+  is_resolved: boolean
   frame_path?: string | null
   frame_url?: string | null
 }
