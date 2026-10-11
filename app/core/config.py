@@ -33,27 +33,27 @@ class Settings(BaseSettings):
     BOOTSTRAP_PASSWORD: str = "admin123"
     BOOTSTRAP_SECTOR: Literal["construction", "medical", "both"] = "construction"
 
-    # RTSP allowlist (SSRF protection)
+    # Source security (SSRF & Path Traversal protection)
     ALLOWED_RTSP_PREFIXES: str = ""
+    ALLOWED_VIDEO_DIR: str = ""
 
-    # ===== Construction Model =====
-    CONSTRUCTION_MODEL_PATH: str = "Model/ppe_construction.pt"
+    # Construction Model
+    CONSTRUCTION_MODEL_PATH: str = "Model/ppe.pt"
     CONSTRUCTION_DETECTION_CONFIDENCE: float = 0.10
     CONSTRUCTION_DEFAULT_CLASS_CONF: float = 0.25
     CONSTRUCTION_CLASS_CONF_THRESHOLDS: str = ""
 
-    # ===== Medical Model =====
-    MEDICAL_MODEL_PATH: str = "Model/ppe_medical.pt"
+    # Medical Model
+    MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel2.pt"
     MEDICAL_DETECTION_CONFIDENCE: float = 0.15
     MEDICAL_DEFAULT_CLASS_CONF: float = 0.30
     MEDICAL_CLASS_CONF_THRESHOLDS: str = ""
 
     # Violation frames storage
     FRAMES_DIR: str = "violation_frames"
-    MAX_FRAME_AGE_DAYS: int = 30  # 0 أو أقل = تعطيل التنظيف التلقائي
+    MAX_FRAME_AGE_DAYS: int = 30
     FRAME_CLEANUP_INTERVAL_HOURS: float = 6.0
 
-    # Alert timing
     # Alert timing
     ALERT_COOLDOWN_SECONDS: int = 60
     VIOLATION_PERSIST_SECONDS: int = 8
@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     FRAME_READ_RETRY_DELAY_SECONDS: float = 0.05
     STREAM_FPS_DELAY_SECONDS: float = 0.04  # ~25 fps
 
-    # Email
+    # Email alerts
     SENDER_EMAIL: str = ""
     RECEIVER_EMAIL: str = ""
     EMAIL_PASSWORD: str = ""
@@ -79,9 +79,7 @@ class Settings(BaseSettings):
 
     @staticmethod
     def parse_class_thresholds_str(s: str) -> dict[int, float]:
-        """
-        Parses "10:0.40,8:0.20" into {10:0.40, 8:0.20}
-        """
+        """Parses '10:0.40,8:0.20' into {10: 0.40, 8: 0.20}."""
         out: dict[int, float] = {}
         s = (s or "").strip()
         if not s:

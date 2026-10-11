@@ -13,7 +13,10 @@ async def health(request: Request):
     try:
         manager: CameraManager = get_camera_manager(request)
         active = manager.active_count()
-        detectors_loaded = hasattr(request.app.state, "detectors")
+        detectors_loaded = bool(
+            getattr(request.app.state, "detectors", None)
+            or getattr(request.app.state, "detector", None)
+        )
     except Exception:
         active = 0
         detectors_loaded = False
@@ -21,5 +24,22 @@ async def health(request: Request):
     return {
         "status": "ok",
         "detectors_loaded": detectors_loaded,
+        "model_loaded": detectors_loaded,
         "cameras_active": active,
+    }
+
+
+@router.get("/metrics")
+async def metrics(request: Request):
+    try:
+        manager: CameraManager = get_camera_manager(request)
+        cameras = manager.counts_snapshot()
+        active = manager.active_count()
+    except Exception:
+        cameras = {}
+        active = 0
+
+    return {
+        "cameras_active": active,
+        "cameras": cameras,
     }

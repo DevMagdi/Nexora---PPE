@@ -4,44 +4,35 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from alembic import context
-
-# ✅ بنضيف جذر المشروع لـ sys.path يدويًا، عشان نقدر نعمل
-# import لحزمة app من جوه env.py، بغض النظر عن المسار اللي
-# alembic بيتنفذ منه فعليًا.
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
 from app.core.config import settings  # noqa: E402
 from app.db.models import Base  # noqa: E402
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ✅ بنربط target_metadata بالموديلز الحقيقية بتاعة التطبيق،
-# عشان --autogenerate يقدر يقارن الموديلز بالداتابيز الفعلية.
 target_metadata = Base.metadata
 
 
 def get_sync_database_url() -> str:
-    """
-    Alembic بيشتغل sync افتراضيًا، لكن DATABASE_URL بتاعنا مبني على
-    aioodbc (async) عشان التطبيق نفسه. هنا بنحوّل الـ URL لنسخة sync
-    (pyodbc) خصيصًا لعمليات الـ migration بس، من غير ما نلمس أي حاجة
-    في إعدادات التطبيق الأساسية.
-    """
-    return settings.DATABASE_URL.replace("mssql+aioodbc", "mssql+pyodbc")
+    """Converts async SQLAlchemy URLs into synchronous URLs for Alembic."""
+    url = settings.DATABASE_URL
+    if url.startswith("sqlite+aiosqlite"):
+        return url.replace("sqlite+aiosqlite", "sqlite", 1)
+    if url.startswith("postgresql+asyncpg"):
+        return url.replace("postgresql+asyncpg", "postgresql+psycopg2", 1)
+    if url.startswith("mssql+aioodbc"):
+        return url.replace("mssql+aioodbc", "mssql+pyodbc", 1)
+    return url
 
 
-# ✅ بنحط الـ URL الصحيح (من .env الحقيقي بتاعنا) بدل الـ placeholder
-# الموجود في alembic.ini.
 config.set_main_option("sqlalchemy.url", get_sync_database_url())
 
 

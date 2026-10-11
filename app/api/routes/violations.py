@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -11,18 +10,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
-from app.db.models import Violation, utc_now, Camera, User
+from app.db.models import Camera, User, Violation, utc_now
 from app.db.session import get_db
 from app.schemas.violation import ViolationListResponse, ViolationResponse
 
 router = APIRouter(prefix="/violations", tags=["violations"])
 
 
-def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+def _to_naive_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt
 
 
@@ -55,10 +54,10 @@ def _apply_filters(q, camera_id, violation_type, from_dt, to_dt):
 
 @router.get("", response_model=ViolationListResponse)
 async def list_violations(
-    camera_id: Optional[int] = Query(None),
-    violation_type: Optional[str] = Query(None),
-    from_dt: Optional[datetime] = Query(None, alias="from"),
-    to_dt: Optional[datetime] = Query(None, alias="to"),
+    camera_id: int | None = Query(None),
+    violation_type: str | None = Query(None),
+    from_dt: datetime | None = Query(None, alias="from"),
+    to_dt: datetime | None = Query(None, alias="to"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -88,10 +87,10 @@ async def list_violations(
 
 @router.get("/export")
 async def export_violations(
-    camera_id: Optional[int] = Query(None),
-    violation_type: Optional[str] = Query(None),
-    from_dt: Optional[datetime] = Query(None, alias="from"),
-    to_dt: Optional[datetime] = Query(None, alias="to"),
+    camera_id: int | None = Query(None),
+    violation_type: str | None = Query(None),
+    from_dt: datetime | None = Query(None, alias="from"),
+    to_dt: datetime | None = Query(None, alias="to"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -106,9 +105,29 @@ async def export_violations(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["id", "camera_id", "violation_type", "confidence", "timestamp", "resolved_at", "frame_path"])
+    writer.writerow(
+        [
+            "id",
+            "camera_id",
+            "violation_type",
+            "confidence",
+            "timestamp",
+            "resolved_at",
+            "frame_path",
+        ]
+    )
     for v in violations:
-        writer.writerow([v.id, v.camera_id, v.violation_type, v.confidence, v.timestamp, v.resolved_at, v.frame_path])
+        writer.writerow(
+            [
+                v.id,
+                v.camera_id,
+                v.violation_type,
+                v.confidence,
+                v.timestamp,
+                v.resolved_at,
+                v.frame_path,
+            ]
+        )
 
     output.seek(0)
     return StreamingResponse(

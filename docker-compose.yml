@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   app:
     build:
@@ -10,9 +8,11 @@ services:
     environment:
       APP_ENV: prod
       DATABASE_URL: postgresql+asyncpg://ppe:ppe@db:5432/ppe_detection
-      MODEL_PATH: Model/ppe.pt
+      CONSTRUCTION_MODEL_PATH: Model/ppe.pt
+      MEDICAL_MODEL_PATH: Model/bestMedicalModel2.pt
     env_file:
-      - .env
+      - path: .env
+        required: false
     depends_on:
       db:
         condition: service_healthy

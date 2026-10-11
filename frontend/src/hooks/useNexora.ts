@@ -7,6 +7,7 @@ import {
   getCameras,
   getHealth,
   getPPEClassesMeta,
+  getToken,
   getViolations,
   login,
   me,
@@ -21,6 +22,7 @@ export function useMe() {
   return useQuery({
     queryKey: ["me"],
     queryFn: me,
+    enabled: Boolean(getToken()),
     retry: false,
     staleTime: 30_000,
   })
@@ -81,7 +83,8 @@ export function useCreateCamera() {
 export function useUpdateCamera() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (vars: { id: number; payload: CameraUpdatePayload }) => updateCamera(vars.id, vars.payload),
+    mutationFn: (vars: { id: number; payload: CameraUpdatePayload }) =>
+      updateCamera(vars.id, vars.payload),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["cameras"] })
     },
@@ -128,6 +131,7 @@ export function useViolations(params?: Parameters<typeof getViolations>[0]) {
   return useQuery({
     queryKey: ["violations", params ?? {}],
     queryFn: () => getViolations(params),
+    placeholderData: (prev) => prev,
     refetchInterval: 10_000,
   })
 }
@@ -144,6 +148,7 @@ export function useResolveViolation() {
 
 export function useExportViolations() {
   return useMutation({
-    mutationFn: (params?: Parameters<typeof downloadViolationsCsv>[0]) => downloadViolationsCsv(params),
+    mutationFn: (params?: Parameters<typeof downloadViolationsCsv>[0]) =>
+      downloadViolationsCsv(params),
   })
 }

@@ -3,6 +3,8 @@ import tailwindcss from "@tailwindcss/vite"
 import { defineConfig } from "vite"
 import { fileURLToPath, URL } from "node:url"
 
+const proxyTarget = process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8000"
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -10,16 +12,21 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  build: {
+    chunkSizeWarningLimit: 1000,
+  },
   server: {
+    host: "0.0.0.0",
     port: 5173,
+    allowedHosts: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: proxyTarget,
         changeOrigin: true,
-        ws: true,          // ✅ مهم جدًا
+        ws: true,
       },
       "/frames": {
-        target: "http://127.0.0.1:8000",
+        target: proxyTarget,
         changeOrigin: true,
       },
     },
