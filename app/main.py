@@ -160,6 +160,8 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(full_path: str):
+            if full_path.startswith(("api/", "frames/")):
+                raise HTTPException(status_code=404, detail="Not Found")
             if full_path:
                 candidate = (FRONTEND_DIST / full_path).resolve()
                 if (

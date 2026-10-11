@@ -41,3 +41,12 @@ async def test_meta_ppe_classes(test_client):
     r_m = await test_client.get("/api/v1/meta/ppe-classes", params={"profile": "medical"})
     assert r_m.status_code == 200
     assert r_m.json()["profile"] == "medical"
+
+
+async def test_frames_requires_auth_and_blocks_traversal(anon_client, test_client):
+    unauth = await anon_client.get("/frames/camera_1/test.jpg")
+    assert unauth.status_code == 401
+
+    missing = await test_client.get("/frames/camera_1/nonexistent.jpg")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Frame not found"
