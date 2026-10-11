@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.logging import get_logger
+logger = get_logger(__name__)
 from app.api.deps import get_camera_manager
 from app.camera.manager import CameraManager
 from app.core.security import require_api_key
@@ -54,6 +55,7 @@ async def create_camera(
         source_uri=body.source_uri,
         enabled_classes=body.enabled_classes,
     )
+    logger.info("CREATE_CAMERA enabled_classes=%s", body.enabled_classes)
     db.add(cam)
     await db.commit()
     await db.refresh(cam)

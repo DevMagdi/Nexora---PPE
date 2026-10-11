@@ -6,7 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Application
     APP_ENV: Literal["dev", "staging", "prod"] = "dev"
@@ -18,8 +22,6 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["*"]
 
     # Security
-    # ⚠️ سيبها فاضية يفعّل "وضع dev" (مفيش حماية على الـ endpoints
-    # الحساسة) مع تحذير في اللوج. لازم تتحدد قبل أي نشر production.
     API_KEY: str = ""
 
     # Database
@@ -27,7 +29,16 @@ class Settings(BaseSettings):
 
     # Model
     MODEL_PATH: str = "Model/ppe.pt"
+
+    # Global YOLO confidence passed to model(...) before per-class filtering
     DETECTION_CONFIDENCE: float = 0.5
+
+    # Per-class confidence thresholds (post-filtering)
+    # Example:
+    # DEFAULT_CLASS_CONF=0.25
+    # CLASS_CONF_THRESHOLDS="10:0.40,8:0.20"
+    DEFAULT_CLASS_CONF: float = 0.25
+    CLASS_CONF_THRESHOLDS: str = ""
 
     # Violation frames storage
     FRAMES_DIR: str = "violation_frames"
@@ -56,9 +67,31 @@ class Settings(BaseSettings):
     WEBHOOK_URL: str = ""
     WEBHOOK_TIMEOUT_SECONDS: float = 10.0
 
-    # RTSP allowlist (SSRF protection) — قائمة مفصولة بفواصل مثل:
-    # "rtsp://192.168.1.,rtsp://localhost" — فاضية = بدون قيود (الافتراضي).
+    # RTSP allowlist (SSRF protection)
     ALLOWED_RTSP_PREFIXES: str = ""
+
+    def parse_class_thresholds(self) -> dict[int, float]:
+        """
+        Parses CLASS_CONF_THRESHOLDS string like:
+        "10:0.40,8:0.20" into {10: 0.40, 8: 0.20}
+        """
+        out: dict[int, float] = {}
+        s = (self.CLASS_CONF_THRESHOLDS or "").strip()
+        if not s:
+            return out
+
+        for part in s.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if ":" not in part:
+                continue
+            k, v = part.split(":", 1)
+            try:
+                out[int(k.strip())] = float(v.strip())
+            except ValueError:
+                continue
+        return out
 
 
 settings = Settings()

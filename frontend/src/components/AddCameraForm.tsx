@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import PpeClassPicker from "@/components/PpeClassPicker"
-import { useCreateCamera, useUpdateCamera } from "@/hooks/useNexora"
+import { useCreateCamera, useUpdateCamera, usePPEClassesMeta } from "@/hooks/useNexora"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -15,20 +15,28 @@ const SOURCE_TYPE_LABELS: Record<CameraSourceType, string> = {
 }
 
 type Props = {
-  /** "create" (الافتراضي) لإضافة كاميرا جديدة، أو "edit" لتعديل كاميرا موجودة */
   mode?: "create" | "edit"
-  /** مطلوبة في وضع "edit" فقط */
   camera?: Camera
-  /** بينفَّذ بعد نجاح الحفظ (إضافة أو تعديل) — الأب هو المسؤول عن قفل الـ Dialog */
   onSuccess?: () => void
 }
 
 export default function AddCameraForm({ mode = "create", camera, onSuccess }: Props) {
   const createMut = useCreateCamera()
   const updateMut = useUpdateCamera()
+  const { data: ppeMeta } = usePPEClassesMeta()
 
   const isEdit = mode === "edit" && camera !== undefined
   const pending = isEdit ? updateMut.isPending : createMut.isPending
+
+  const defaultEnabled = useMemo<string[]>(
+    () => (ppeMeta?.default_enabled?.length ? ppeMeta.default_enabled : ["helmet", "vest"]),
+    [ppeMeta],
+  )
+
+  const allowedKeys = useMemo<Set<string>>(
+    () => new Set((ppeMeta?.allowed ?? ["helmet", "vest", "mask", "gloves", "boots", "goggles"]).map(String)),
+    [ppeMeta],
+  )
 
   const [name, setName] = useState(camera?.name ?? "")
   const [sourceType, setSourceType] = useState<CameraSourceType>(camera?.source_type ?? "rtsp")
@@ -42,12 +50,25 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
     return "مسار ملف فيديو مثل: C:\\videos\\test.mp4"
   }, [sourceType])
 
-  // قيمة افتراضية منطقية لـ webcam index — وقت الإنشاء بس، مش وقت التعديل
+  // default enabled (create only) لو المستخدم ما اختارش أي حاجة
+  useEffect(() => {
+    if (isEdit) return
+    if (enabled.length === 0) setEnabled(defaultEnabled)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEdit, defaultEnabled])
+
+  // قيمة افتراضية منطقية لـ webcam index — وقت الإنشاء بس
   useEffect(() => {
     if (isEdit) return
     if (sourceType === "webcam" && !/^\d+$/.test(sourceUri)) setSourceUri("0")
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceType])
+
+  function sanitizeEnabled(values: string[]) {
+    const cleaned = (values ?? []).map(String).filter((k) => allowedKeys.has(k))
+    const unique = Array.from(new Set(cleaned))
+    return unique
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -58,15 +79,20 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
       return
     }
 
+    const enabledClean = sanitizeEnabled(enabled)
+    const finalEnabled = enabledClean.length ? enabledClean : defaultEnabled
+
+    // Debug مؤقت (امسحه بعد ما تتأكد)
+    console.log("Submitting enabled_classes =", finalEnabled)
+
     try {
       if (isEdit && camera) {
-        // ✅ الباك إند مايسمحش بتغيير source_type بعد الإنشاء، فمش بنبعته هنا
         await updateMut.mutateAsync({
           id: camera.id,
           payload: {
             name: name.trim(),
             source_uri: sourceUri.trim(),
-            enabled_classes: enabled,
+            enabled_classes: finalEnabled,
           },
         })
       } else {
@@ -74,11 +100,11 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
           name: name.trim(),
           source_type: sourceType,
           source_uri: sourceUri.trim(),
-          enabled_classes: enabled,
+          enabled_classes: finalEnabled,
         })
         setName("")
         setSourceUri(sourceType === "webcam" ? "0" : "")
-        setEnabled([])
+        setEnabled(defaultEnabled)
       }
 
       onSuccess?.()
