@@ -22,15 +22,27 @@ export const api = axios.create({
 })
 
 export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || ""
+  try {
+    return localStorage.getItem(TOKEN_KEY) || ""
+  } catch {
+    return ""
+  }
 }
 
 export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token)
+  try {
+    localStorage.setItem(TOKEN_KEY, token)
+  } catch {
+    /* ignore */
+  }
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY)
+  try {
+    localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
 }
 
 export function logout() {
@@ -143,7 +155,7 @@ export async function resolveViolation(id: number): Promise<Violation> {
   return data
 }
 
-/** تحميل CSV بنفس التوكن (الـ endpoint محمي بـ Bearer مش query) */
+/** تحميل CSV بنفس التوكن (الـ endpoint محمي بـ Bearer) */
 export async function downloadViolationsCsv(params?: {
   camera_id?: number
   violation_type?: string
@@ -165,12 +177,16 @@ export async function downloadViolationsCsv(params?: {
   URL.revokeObjectURL(url)
 }
 
-/** الباك بيرجع /frames/{frame_path} خارج /api/v1 */
+/** الباك بيرجع /frames/{frame_path} محمي بالتوكن */
 export function resolveFrameUrl(frameUrl?: string | null): string | null {
   if (!frameUrl) return null
-  if (/^https?:\/\//i.test(frameUrl)) return frameUrl
-  const path = frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`
-  return MEDIA_ORIGIN ? `${MEDIA_ORIGIN}${path}` : path
+  const token = getToken()
+  const base = /^https?:\/\//i.test(frameUrl)
+    ? frameUrl
+    : `${MEDIA_ORIGIN}${frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`}`
+  if (!token) return base
+  const sep = base.includes("?") ? "&" : "?"
+  return `${base}${sep}token=${encodeURIComponent(token)}`
 }
 
 export function getMjpegStreamUrl(cameraId: number): string {

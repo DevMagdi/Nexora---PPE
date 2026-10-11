@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -12,10 +11,10 @@ class ViolationResponse(BaseModel):
     violation_type: str
     confidence: float
     timestamp: datetime
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
     is_resolved: bool = False
-    frame_path: Optional[str]
-    frame_url: Optional[str] = None
+    frame_path: str | None
+    frame_url: str | None = None
 
     model_config = {"from_attributes": True}
 

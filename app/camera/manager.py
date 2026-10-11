@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 import uuid
@@ -11,14 +12,18 @@ import cv2
 from app.alerts.base import AlertHandler
 from app.alerts.dispatcher import AlertDispatcher
 from app.alerts.email_handler import EmailHandler
-from app.alerts.webhook_handler import WebhookHandler
+from app.alerts.webhook_handler import SlackWebhookHandler, WebhookHandler
 from app.camera.source import CameraSource
 from app.core.config import settings
 from app.core.detector import PPEDetector
 from app.core.frame_annotator import annotate_frame
 from app.core.logging import get_logger
-from app.core.ppe import sanitize_enabled_classes, Profile
-from app.core.violation_checker import ConstructionViolationChecker, MedicalViolationChecker, BaseViolationChecker
+from app.core.ppe import Profile, sanitize_enabled_classes
+from app.core.violation_checker import (
+    BaseViolationChecker,
+    ConstructionViolationChecker,
+    MedicalViolationChecker,
+)
 from app.db.repository import record_alert_log, save_violation
 
 logger = get_logger(__name__)
@@ -32,8 +37,10 @@ class _CameraEntry:
     enabled_classes: list[str] = field(default_factory=list)
     task: asyncio.Task | None = None
     latest_frame: bytes | None = None
+    frame_seq: int = 0
     latest_counts: dict = field(default_factory=dict)
     alert_sent_until: float = 0.0
+    last_det_log: float = 0.0
 
 
 class CameraManager:
@@ -62,8 +69,20 @@ class CameraManager:
         handlers: list[AlertHandler] = []
         if settings.SENDER_EMAIL and settings.RECEIVER_EMAIL and settings.EMAIL_PASSWORD:
             handlers.append(EmailHandler())
+        if settings.SLACK_WEBHOOK_URL:
+            handlers.append(
+                SlackWebhookHandler(
+                    settings.SLACK_WEBHOOK_URL,
+                    timeout=settings.WEBHOOK_TIMEOUT_SECONDS,
+                )
+            )
         if settings.WEBHOOK_URL:
-            handlers.append(WebhookHandler(settings.WEBHOOK_URL, timeout=settings.WEBHOOK_TIMEOUT_SECONDS))
+            handlers.append(
+                WebhookHandler(
+                    settings.WEBHOOK_URL,
+                    timeout=settings.WEBHOOK_TIMEOUT_SECONDS,
+                )
+            )
         return handlers
 
     def _get_lock(self, camera_id: int) -> asyncio.Lock:
@@ -73,12 +92,15 @@ class CameraManager:
 
     async def start(self) -> None:
         try:
-            from app.db.session import AsyncSessionLocal
-            from app.db.models import Camera
             from sqlalchemy import select
 
+            from app.db.models import Camera
+            from app.db.session import AsyncSessionLocal
+
             async with AsyncSessionLocal() as session:
-                result = await session.execute(select(Camera).where(Camera.is_active == True))  # noqa: E712
+                result = await session.execute(
+                    select(Camera).where(Camera.is_active == True)  # noqa: E712
+                )
                 cameras = result.scalars().all()
         except Exception as exc:
             logger.warning("Could not load active cameras from DB: %s", exc)
@@ -86,7 +108,13 @@ class CameraManager:
 
         for cam in cameras:
             try:
-                await self._launch_camera(cam.id, cam.profile, cam.source_type, cam.source_uri, cam.enabled_classes)
+                await self._launch_camera(
+                    cam.id,
+                    cam.profile,  # type: ignore[arg-type]
+                    cam.source_type,
+                    cam.source_uri,
+                    cam.enabled_classes,
+                )
             except Exception as exc:
                 logger.warning("Failed to restore camera %d on startup: %s", cam.id, exc)
 
@@ -95,32 +123,44 @@ class CameraManager:
     async def stop(self) -> None:
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
             self._cleanup_task = None
 
         for entry in list(self._entries.values()):
             if entry.task:
                 entry.task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await entry.task
-                except asyncio.CancelledError:
-                    pass
             await entry.source.release()
         self._entries.clear()
 
     # ------------------------------------------------------------------
-    # Source building
+    # Source building & validation
     # ------------------------------------------------------------------
 
     def _validate_rtsp_uri(self, uri: str) -> None:
+        if not uri.lower().startswith(("rtsp://", "rtsps://", "http://", "https://")):
+            raise ValueError("RTSP source_uri must start with rtsp://, rtsps://, http://, or https://")
         allowed = [p.strip() for p in settings.ALLOWED_RTSP_PREFIXES.split(",") if p.strip()]
         if not allowed:
             return
         if not any(uri.startswith(p) for p in allowed):
             raise ValueError(f"RTSP source not allowed by ALLOWED_RTSP_PREFIXES: {allowed}")
+
+    def _validate_file_uri(self, uri: str) -> str:
+        cleaned = (uri or "").strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("Invalid video file path")
+        if settings.ALLOWED_VIDEO_DIR:
+            base_dir = os.path.realpath(settings.ALLOWED_VIDEO_DIR)
+            resolved = os.path.realpath(
+                cleaned if os.path.isabs(cleaned) else os.path.join(base_dir, cleaned)
+            )
+            if os.path.commonpath([base_dir, resolved]) != base_dir:
+                raise ValueError("Video file path is outside ALLOWED_VIDEO_DIR")
+            return resolved
+        return cleaned
 
     def _build_source(self, source_type: str, source_uri: str) -> CameraSource:
         if source_type == "webcam":
@@ -128,8 +168,10 @@ class CameraManager:
 
             try:
                 idx = int(source_uri)
-            except (TypeError, ValueError):
-                raise ValueError("webcam source_uri must be an integer index like '0' or '1'")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "webcam source_uri must be an integer index like '0' or '1'"
+                ) from exc
             return WebcamSource(idx)
 
         if source_type == "rtsp":
@@ -141,7 +183,8 @@ class CameraManager:
         if source_type == "file":
             from app.camera.file_source import FileSource
 
-            return FileSource(source_uri)
+            validated_path = self._validate_file_uri(source_uri)
+            return FileSource(validated_path)
 
         raise ValueError(f"Unknown source_type: {source_type!r}")
 
@@ -190,7 +233,9 @@ class CameraManager:
         source_uri: str,
         enabled_classes: list[str] | None = None,
     ) -> bool:
-        return await self._launch_camera(camera_id, profile, source_type, source_uri, enabled_classes)
+        return await self._launch_camera(
+            camera_id, profile, source_type, source_uri, enabled_classes
+        )
 
     async def stop_camera(self, camera_id: int) -> bool:
         async with self._get_lock(camera_id):
@@ -200,10 +245,8 @@ class CameraManager:
 
             if entry.task:
                 entry.task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await entry.task
-                except asyncio.CancelledError:
-                    pass
 
             await entry.source.release()
             self._entries.pop(camera_id, None)
@@ -239,29 +282,29 @@ class CameraManager:
                 "no_gloves": self._count_by_name(detections, "NO-Gloves"),
                 "total": len(detections),
             }
-        else:
-            return {
-                "no_mask": self._count_by_name(detections, "no mask"),
-                "no_gloves": self._count_by_name(detections, "no hand gloves"),
-                "no_cap": self._count_by_name(detections, "no head cap"),
-                "total": len(detections),
-            }
+        return {
+            "no_mask": self._count_by_name(detections, "no mask"),
+            "no_gloves": self._count_by_name(detections, "no hand gloves"),
+            "no_cap": self._count_by_name(detections, "no head cap"),
+            "total": len(detections),
+        }
 
     def _stats_lines(self, profile: Profile, counts: dict) -> list[str]:
         if profile == "construction":
             return [
-                f"Hardhats: {counts.get('hardhat',0)}",
-                f"Safety Vests: {counts.get('vest',0)}",
-                f"People: {counts.get('person',0)}",
+                f"Hardhats: {counts.get('hardhat', 0)}",
+                f"Safety Vests: {counts.get('vest', 0)}",
+                f"People: {counts.get('person', 0)}",
             ]
-        else:
-            return [
-                f"NO-Mask: {counts.get('no_mask',0)}",
-                f"NO-Gloves: {counts.get('no_gloves',0)}",
-                f"NO-HeadCap: {counts.get('no_cap',0)}",
-            ]
+        return [
+            f"NO-Mask: {counts.get('no_mask', 0)}",
+            f"NO-Gloves: {counts.get('no_gloves', 0)}",
+            f"NO-HeadCap: {counts.get('no_cap', 0)}",
+        ]
 
-    async def _save_violation_frame(self, loop: asyncio.AbstractEventLoop, camera_id: int, frame) -> str:
+    async def _save_violation_frame(
+        self, loop: asyncio.AbstractEventLoop, camera_id: int, frame
+    ) -> str:
         frame_dir = os.path.join(settings.FRAMES_DIR, f"camera_{camera_id}")
         os.makedirs(frame_dir, exist_ok=True)
         fname = f"violation_{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
@@ -307,13 +350,16 @@ class CameraManager:
 
                 detections = await loop.run_in_executor(None, detector.detect, frame)
                 entry.latest_counts = self._compute_counts(entry.profile, detections)
-                # debug: مرة كل 5 ثواني لو فيه كشف أو صفر مستمر
+
                 now_ts = time.time()
-                if now_ts - getattr(entry, "_last_det_log", 0) >= 5:
-                    entry._last_det_log = now_ts  # type: ignore[attr-defined]
+                if now_ts - entry.last_det_log >= 5:
+                    entry.last_det_log = now_ts
                     sample = [(d.class_name, round(d.confidence, 2)) for d in detections[:8]]
                     logger.info("cam=%d profile=%s dets=%s", camera_id, entry.profile, sample)
-                violations = checker.check(camera_id, detections, enabled_classes=entry.enabled_classes)
+
+                violations = checker.check(
+                    camera_id, detections, enabled_classes=entry.enabled_classes
+                )
                 await self._handle_violations(entry, violations, frame)
 
                 show_alert = time.time() < entry.alert_sent_until
@@ -326,6 +372,7 @@ class CameraManager:
                 resized = cv2.resize(annotated, (640, 480))
                 _, jpeg = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 entry.latest_frame = jpeg.tobytes()
+                entry.frame_seq += 1
 
                 await self._broadcast(camera_id, entry.latest_counts)
                 await asyncio.sleep(0)
@@ -372,16 +419,14 @@ class CameraManager:
             logger.info("Frame cleanup: removed %d old violation frame(s)", removed)
 
     # ------------------------------------------------------------------
-    # WebSocket broadcasting
+    # WebSocket & Stream helpers
     # ------------------------------------------------------------------
 
     async def _broadcast(self, camera_id: int, data: dict) -> None:
         queues = self._ws_subscribers.get(camera_id, [])
         for q in list(queues):
-            try:
+            with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(data)
-            except asyncio.QueueFull:
-                pass
 
     def subscribe(self, camera_id: int) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=10)
@@ -396,6 +441,16 @@ class CameraManager:
     def get_latest_frame(self, camera_id: int) -> bytes | None:
         entry = self._entries.get(camera_id)
         return entry.latest_frame if entry else None
+
+    def get_latest_frame_with_seq(self, camera_id: int) -> tuple[bytes | None, int]:
+        entry = self._entries.get(camera_id)
+        if entry is None:
+            return None, 0
+        return entry.latest_frame, entry.frame_seq
+
+    def get_latest_counts(self, camera_id: int) -> dict | None:
+        entry = self._entries.get(camera_id)
+        return entry.latest_counts if entry and entry.latest_counts else None
 
     def is_running(self, camera_id: int) -> bool:
         entry = self._entries.get(camera_id)

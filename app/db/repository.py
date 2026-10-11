@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import select
 
+from app.core.auth import hash_password
 from app.core.logging import get_logger
 from app.core.violation_checker import ViolationEvent
-from app.core.auth import hash_password
 
 logger = get_logger(__name__)
 
 
-async def save_violation(violation: ViolationEvent) -> Optional[int]:
+async def save_violation(violation: ViolationEvent) -> int | None:
     try:
         from app.db.models import Violation
         from app.db.session import AsyncSessionLocal
@@ -33,10 +31,10 @@ async def save_violation(violation: ViolationEvent) -> Optional[int]:
 
 
 async def record_alert_log(
-    violation_id: Optional[int],
+    violation_id: int | None,
     handler_type: str,
     success: bool,
-    error_msg: Optional[str] = None,
+    error_msg: str | None = None,
 ) -> None:
     try:
         from app.db.models import AlertLog
@@ -55,9 +53,6 @@ async def record_alert_log(
         logger.error("Failed to record alert log (%s): %s", handler_type, exc)
 
 
-# ------------------------
-# Users
-# ------------------------
 async def get_user_by_username(username: str):
     from app.db.models import User
     from app.db.session import AsyncSessionLocal
@@ -69,9 +64,7 @@ async def get_user_by_username(username: str):
 
 
 async def ensure_bootstrap_user(username: str, password: str, sector: str) -> None:
-    """
-    ينشئ user واحد عند أول تشغيل لو جدول users فاضي.
-    """
+    """ينشئ user واحد عند أول تشغيل لو جدول users فاضي."""
     from app.db.models import User
     from app.db.session import AsyncSessionLocal
 
@@ -88,4 +81,8 @@ async def ensure_bootstrap_user(username: str, password: str, sector: str) -> No
         )
         session.add(u)
         await session.commit()
-        logger.warning("Bootstrap user created: username=%s sector=%s (CHANGE PASSWORD!)", username, sector)
+        logger.warning(
+            "Bootstrap user created: username=%s sector=%s (CHANGE PASSWORD!)",
+            username,
+            sector,
+        )

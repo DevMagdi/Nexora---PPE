@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass
+
 import numpy as np
 
-from app.core.logging import get_logger
 from app.core.config import settings
+from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -24,7 +27,6 @@ CLASS_COLORS_BY_NAME = {
     "NO-Safety Boots": (80, 120, 255),
     "Goggles": (180, 255, 180),
     "NO-Goggles": (120, 220, 120),
-
     # Medical (lowercase)
     "mask": (0, 255, 0),
     "no mask": (0, 0, 255),
@@ -52,6 +54,21 @@ class Detection:
     color: tuple[int, int, int]
 
 
+def resolve_model_path(model_path: str, fallbacks: tuple[str, ...] = ()) -> str:
+    """Resolves model path on disk, falling back to known bundled weights if needed."""
+    if os.path.exists(model_path):
+        return model_path
+    for candidate in fallbacks:
+        if os.path.exists(candidate):
+            logger.warning(
+                "Configured model '%s' not found; falling back to '%s'",
+                model_path,
+                candidate,
+            )
+            return candidate
+    return model_path
+
+
 class PPEDetector:
     def __init__(
         self,
@@ -59,16 +76,18 @@ class PPEDetector:
         confidence: float,
         default_class_conf: float,
         class_conf_thresholds: str = "",
+        fallbacks: tuple[str, ...] = (),
     ) -> None:
         from ultralytics import YOLO
 
-        self.model = YOLO(model_path)
+        resolved_path = resolve_model_path(model_path, fallbacks)
+        self.model = YOLO(resolved_path)
         self.confidence = confidence
-
         self.default_class_conf = default_class_conf
         self.class_conf = settings.parse_class_thresholds_str(class_conf_thresholds)
+        self._lock = threading.Lock()
 
-        logger.info("PPEDetector loaded: %s (global_conf=%.2f)", model_path, confidence)
+        logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, confidence)
         logger.info("Default class conf: %.2f", self.default_class_conf)
         logger.info("Class-specific conf map: %s", self.class_conf)
         logger.info("Model classes: %s", self.model.names)
@@ -78,9 +97,11 @@ class PPEDetector:
         return self.model.names
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        results = self.model(frame, conf=self.confidence, verbose=False)
-        detections: list[Detection] = []
+        # YOLO predictor instance is not thread-safe across concurrent run_in_executor calls
+        with self._lock:
+            results = self.model(frame, conf=self.confidence, verbose=False)
 
+        detections: list[Detection] = []
         for result in results:
             if result.boxes is None:
                 continue

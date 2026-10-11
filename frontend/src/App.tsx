@@ -18,7 +18,7 @@ import {
   useStopCamera,
   useViolations,
 } from "@/hooks/useNexora"
-import { api, clearToken, getMjpegStreamUrl, getWebSocketUrl } from "@/lib/api"
+import { clearToken, downloadViolationsCsv, getMjpegStreamUrl, getWebSocketUrl, resolveFrameUrl } from "@/lib/api"
 import nexoraLogoColor from "@/assets/logo/nexora-logo-full-color.svg"
 import nexoraLogoWhite from "@/assets/logo/nexora-logo-full-white.svg"
 import {
@@ -274,15 +274,6 @@ function sideMetricIcon(label: string) {
   return <Boxes className="size-4 text-primary" />
 }
 
-/** الباك بيرجع /frames/{frame_path} خارج /api/v1 */
-function resolveFrameUrl(frameUrl?: string | null): string | null {
-  if (!frameUrl) return null
-  if (/^https?:\/\//i.test(frameUrl)) return frameUrl
-  const path = frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`
-  const origin = String(import.meta.env.VITE_API_ORIGIN ?? "").replace(/\/$/, "")
-  return origin ? `${origin}${path}` : path
-}
-
 function withParams(url: string, params: Record<string, string | undefined>) {
   try {
     const isAbsolute = /^[a-z][a-z\d+.-]*:/i.test(url)
@@ -326,7 +317,6 @@ function useMediaQuery(query: string) {
   )
   useEffect(() => {
     const mq = window.matchMedia(query)
-    setMatches(mq.matches)
     const onChange = () => setMatches(mq.matches)
     mq.addEventListener("change", onChange)
     return () => mq.removeEventListener("change", onChange)
@@ -374,12 +364,6 @@ function useInView<T extends Element>() {
     return () => io.disconnect()
   }, [])
   return [ref, inView] as const
-}
-
-function useLatest<T>(value: T | undefined) {
-  const ref = useRef<T | undefined>(value)
-  if (value !== undefined) ref.current = value
-  return ref.current
 }
 
 function useTheme() {
@@ -732,16 +716,14 @@ interface LiveStageProps {
 }
 
 function LiveStage({ camera, metrics, status, compliance, pending, onStart, onStop, onGoCameras }: LiveStageProps) {
-  const [streamError, setStreamError] = useState(false)
+  const [errorKey, setErrorKey] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
 
-  useEffect(() => {
-    setStreamError(false)
-    setNonce(0)
-  }, [camera?.id, camera?.is_running])
+  const currentStreamKey = `${camera?.id ?? "none"}-${camera?.is_running ?? false}-${nonce}`
+  const streamError = errorKey === currentStreamKey
 
   const retry = () => {
-    setStreamError(false)
+    setErrorKey(null)
     setNonce((n) => n + 1)
   }
 
@@ -797,7 +779,7 @@ function LiveStage({ camera, metrics, status, compliance, pending, onStart, onSt
         <img
           key={camera.id}
           src={streamSrc}
-          onError={() => setStreamError(true)}
+          onError={() => setErrorKey(currentStreamKey)}
           className="absolute inset-0 z-0 h-full w-full object-contain"
           alt={`البث المباشر من ${camera.name}`}
         />
@@ -1061,7 +1043,7 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<Camera | null>(null)
 
   const [bellOpen, setBellOpen] = useState(false)
-  const [seenCount, setSeenCount] = useState<number | null>(null)
+  const [seenByRange, setSeenByRange] = useState<Partial<Record<RangeKey, number>>>({})
   const [toast, setToast] = useState<ToastState | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
@@ -1090,12 +1072,12 @@ export default function App() {
   }, [toast])
 
   useEffect(() => {
-    const t = setTimeout(() => setTypeFilter(typeInput.trim()), 350)
+    const t = setTimeout(() => {
+      setTypeFilter(typeInput.trim())
+      setPage(1)
+    }, 350)
     return () => clearTimeout(t)
   }, [typeInput])
-  useEffect(() => {
-    setPage(1)
-  }, [typeFilter, camFilter, showAllTypes, range])
 
   const ppeLabels = useMemo(() => {
     const m = new Map<string, string>()
@@ -1114,22 +1096,14 @@ export default function App() {
   const runningCams = useMemo(() => cameraList.filter((c) => c.is_running), [cameraList])
   const runningCount = runningCams.length
 
-  useEffect(() => {
-    if (selectedCameraId !== null || cameraList.length === 0) return
-    setSelectedCameraId((cameraList.find((c) => c.is_running) ?? cameraList[0]).id)
-  }, [cameraList, selectedCameraId])
-
-  useEffect(() => {
-    if (selectedCameraId === null) return
-    if (cameraList.length === 0) {
-      setSelectedCameraId(null)
-      return
+  const selectedCamera = useMemo(() => {
+    if (cameraList.length === 0) return null
+    if (selectedCameraId !== null) {
+      const found = cameraList.find((c) => c.id === selectedCameraId)
+      if (found) return found
     }
-    if (cameraList.some((c) => c.id === selectedCameraId)) return
-    setSelectedCameraId((cameraList.find((c) => c.is_running) ?? cameraList[0]).id)
+    return cameraList.find((c) => c.is_running) ?? cameraList[0]
   }, [cameraList, selectedCameraId])
-
-  const selectedCamera = useMemo(() => cameraList.find((c) => c.id === selectedCameraId) ?? null, [cameraList, selectedCameraId])
 
   const filteredCams = useMemo(() => {
     const q = cameraSearch.trim().toLowerCase()
@@ -1233,12 +1207,12 @@ export default function App() {
 
   const byNewest = (a: Violation, b: Violation) => parseTs(b.timestamp).getTime() - parseTs(a.timestamp).getTime()
 
-  const overviewRaw = useLatest(overviewData)
+  const overviewRaw = overviewData
   const overviewList = useMemo(() => [...(overviewRaw?.items ?? [])].sort(byNewest), [overviewRaw])
   const coreCount = useMemo(() => overviewList.filter((v) => isCoreType(v.violation_type)).length, [overviewList])
   const overviewCapped = overviewList.length >= VIOLATIONS_FETCH_LIMIT
 
-  const violationsRaw = useLatest(violationsData)
+  const violationsRaw = violationsData
   const filteredList = useMemo(
     () => (violationsRaw?.items ?? []).filter((v) => showAllTypes || isCoreType(v.violation_type)).sort(byNewest),
     [violationsRaw, showAllTypes],
@@ -1257,24 +1231,12 @@ export default function App() {
   const onExport = useCallback(async () => {
     setExporting(true)
     try {
-      const { data } = await api.get("/violations/export", {
-        params: {
-          camera_id: camFilter === "all" ? undefined : camFilter,
-          from: iso(from),
-          to: iso(to),
-          violation_type: typeFilter || undefined,
-        },
-        responseType: "blob",
+      await downloadViolationsCsv({
+        camera_id: camFilter === "all" ? undefined : camFilter,
+        from: iso(from),
+        to: iso(to),
+        violation_type: typeFilter || undefined,
       })
-      const blob = new Blob([data], { type: "text/csv;charset=utf-8" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = "violations.csv"
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
       notify("success", "تم تنزيل ملف المخالفات")
     } catch {
       notify("error", "تعذّر تصدير المخالفات")
@@ -1312,9 +1274,7 @@ export default function App() {
   }, [overviewList, ppeLabels])
 
   useEffect(() => {
-    setCounts({})
     if (!selectedCamera?.is_running) {
-      setLiveStatus("idle")
       return
     }
     const camId = selectedCamera.id
@@ -1338,7 +1298,6 @@ export default function App() {
         } catch {
           /* رسالة غير صالحة */
         }
-
       }
       ws.onerror = () => ws?.close()
       ws.onclose = () => {
@@ -1352,31 +1311,29 @@ export default function App() {
       disposed = true
       clearTimeout(timer)
       ws?.close()
+      setCounts({})
+      setLiveStatus("idle")
     }
   }, [selectedCamera?.id, selectedCamera?.is_running])
 
   const activeProfile = selectedCamera ? cameraProfile(selectedCamera) : meUser?.sector === "medical" ? "medical" : "construction"
   const isMedicalView = activeProfile === "medical"
-  const compliance = selectedCamera?.is_running ? computeCompliance(activeProfile, counts) : undefined
-  const liveWorkers = selectedCamera?.is_running && !isMedicalView ? counts.person : undefined
+  const activeCounts = selectedCamera?.is_running ? counts : {}
+  const activeLiveStatus: LiveStatus = selectedCamera?.is_running ? liveStatus : "idle"
+  const compliance = selectedCamera?.is_running ? computeCompliance(activeProfile, activeCounts) : undefined
+  const liveWorkers = selectedCamera?.is_running && !isMedicalView ? activeCounts.person : undefined
   const medicalNegatives =
     selectedCamera?.is_running && isMedicalView
-      ? (counts.no_mask ?? 0) + (counts.no_gloves ?? 0) + (counts.no_cap ?? 0)
+      ? (activeCounts.no_mask ?? 0) + (activeCounts.no_gloves ?? 0) + (activeCounts.no_cap ?? 0)
       : undefined
-  const overlayMetrics = liveMetrics(activeProfile, selectedCamera?.is_running ? counts : {})
+  const overlayMetrics = liveMetrics(activeProfile, activeCounts)
   const camPending = selectedCamera !== null && togglingCamId === selectedCamera.id
 
-  useEffect(() => {
-    setSeenCount(null)
-  }, [range])
-  useEffect(() => {
-    if (seenCount === null && overviewData) setSeenCount(overviewData.items.length)
-  }, [overviewData, seenCount])
-
-  const unseen = seenCount === null ? 0 : Math.max(0, overviewList.length - seenCount)
+  const effectiveSeenCount = seenByRange[range] ?? (overviewData ? overviewData.items.length : null)
+  const unseen = effectiveSeenCount === null ? 0 : Math.max(0, overviewList.length - effectiveSeenCount)
   const toggleBell = () => {
     setBellOpen((o) => !o)
-    setSeenCount(overviewList.length)
+    setSeenByRange((prev) => ({ ...prev, [range]: overviewList.length }))
   }
 
   useEffect(() => {
@@ -1689,13 +1646,13 @@ export default function App() {
                   {isMedicalView ? (
                     <MedicalStatusCard
                       count={medicalNegatives}
-                      live={liveStatus === "open"}
+                      live={activeLiveStatus === "open"}
                       hint={selectedCamera?.is_running ? `لحظيًا من «${selectedCamera.name}»` : "شغّل كاميرا لعرض الحالة اللحظية"}
                     />
                   ) : (
                     <ComplianceRing
                       value={compliance}
-                      live={liveStatus === "open"}
+                      live={activeLiveStatus === "open"}
                       hint={selectedCamera?.is_running ? `لحظيًا من «${selectedCamera.name}»` : "شغّل كاميرا لعرض النسبة اللحظية"}
                     />
                   )}
@@ -1706,12 +1663,12 @@ export default function App() {
                     value={isMedicalView ? medicalNegatives : liveWorkers}
                     icon={isMedicalView ? <ShieldAlert className="size-5 stroke-[2.5]" /> : <Users className="size-5 stroke-[2.5]" />}
                     tone={isMedicalView ? "destructive" : "info"}
-                    live={liveStatus === "open"}
+                    live={activeLiveStatus === "open"}
                     hint={
                       selectedCamera?.is_running
                         ? isMedicalView
-                          ? `${counts.no_mask ?? 0} كمامة · ${counts.no_gloves ?? 0} قفازات · ${counts.no_cap ?? 0} غطاء رأس`
-                          : `${counts.hardhat ?? 0} خوذة · ${counts.vest ?? 0} سترة`
+                          ? `${activeCounts.no_mask ?? 0} كمامة · ${activeCounts.no_gloves ?? 0} قفازات · ${activeCounts.no_cap ?? 0} غطاء رأس`
+                          : `${activeCounts.hardhat ?? 0} خوذة · ${activeCounts.vest ?? 0} سترة`
                         : "لا يوجد بث نشط"
                     }
                   />
@@ -2031,7 +1988,7 @@ export default function App() {
                         </div>
                         <div className="mt-1 text-[11px] font-bold text-muted-foreground">نسبة الالتزام بالخوذة</div>
                         {!selectedCamera.is_running && <div className="mt-1 text-[11px] text-muted-foreground">شغّل الكاميرا لعرض البيانات</div>}
-                        {selectedCamera.is_running && compliance === undefined && liveStatus === "open" && (
+                        {selectedCamera.is_running && compliance === undefined && activeLiveStatus === "open" && (
                           <div className="mt-1 text-[11px] text-muted-foreground">لا يوجد أشخاص في الكادر الآن</div>
                         )}
                       </Card>
@@ -2042,7 +1999,7 @@ export default function App() {
                     {!isMedicalView && (
                       <SideMetric
                         icon={<Boxes className="size-4 text-primary" />}
-                        value={selectedCamera.is_running ? counts.total : undefined}
+                        value={selectedCamera.is_running ? activeCounts.total : undefined}
                         label="إجمالي الكشف"
                       />
                     )}
@@ -2055,7 +2012,7 @@ export default function App() {
                   <LiveStage
                     camera={selectedCamera}
                     metrics={overlayMetrics}
-                    status={liveStatus}
+                    status={activeLiveStatus}
                     compliance={compliance}
                     pending={camPending}
                     onStart={() => selectedCamera && toggleCamera(selectedCamera)}

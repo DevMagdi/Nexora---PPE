@@ -2,15 +2,25 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Literal
 
 from app.core.detector import Detection
 from app.core.logging import get_logger
-from app.core.ppe import PPE_CLASS_MAPS, sanitize_enabled_classes, Profile
+from app.core.ppe import PPE_CLASS_MAPS, Profile, sanitize_enabled_classes
 
 logger = get_logger(__name__)
 
-PPE_PRIORITY: list[str] = ["helmet", "vest", "mask", "gloves", "goggles", "boots", "cap", "coat", "full_cover", "shoe_cover"]
+PPE_PRIORITY: list[str] = [
+    "helmet",
+    "vest",
+    "mask",
+    "gloves",
+    "goggles",
+    "boots",
+    "cap",
+    "coat",
+    "full_cover",
+    "shoe_cover",
+]
 MIN_PERSON_OVERLAP = 0.4
 
 
@@ -19,8 +29,8 @@ class ViolationEvent:
     camera_id: int
     violation_type: str
     confidence: float
-    frame_path: Optional[str] = None
-    violation_id: Optional[int] = None
+    frame_path: str | None = None
+    violation_id: int | None = None
 
 
 @dataclass
@@ -29,8 +39,10 @@ class _PPEState:
     last_alert_time: float = 0.0
     last_negative_time: float = 0.0
 
+
 def _norm_name(s: str) -> str:
     return (s or "").strip().lower()
+
 
 @dataclass
 class _CameraState:
@@ -74,7 +86,12 @@ def _assign_ppe_to_persons(
 
 
 class BaseViolationChecker:
-    def check(self, camera_id: int, detections: list[Detection], enabled_classes: Optional[list[str]] = None) -> list[ViolationEvent]:
+    def check(
+        self,
+        camera_id: int,
+        detections: list[Detection],
+        enabled_classes: list[str] | None = None,
+    ) -> list[ViolationEvent]:
         raise NotImplementedError
 
     def reset(self, camera_id: int) -> None:
@@ -96,7 +113,7 @@ class ConstructionViolationChecker(BaseViolationChecker):
         self,
         camera_id: int,
         detections: list[Detection],
-        enabled_classes: Optional[list[str]] = None,
+        enabled_classes: list[str] | None = None,
     ) -> list[ViolationEvent]:
         profile: Profile = "construction"
         enabled_classes = sanitize_enabled_classes(profile, enabled_classes)
@@ -105,6 +122,9 @@ class ConstructionViolationChecker(BaseViolationChecker):
 
         persons = [d for d in detections if d.class_name == "Person"]
         if not persons:
+            # عندما لا يوجد أي شخص في الكادر، لا يجب أن يستمر عدّاد الغياب
+            for ppe_state in state.ppe_states.values():
+                ppe_state.last_seen_time = now
             return []
 
         ppe_items = [d for d in detections if d.class_name != "Person"]
@@ -135,12 +155,7 @@ class ConstructionViolationChecker(BaseViolationChecker):
                 has_positive = bool(positive) and positive in assigned_names
                 has_negative = bool(negative) and negative in assigned_names
 
-                is_missing = False
-                if has_negative:
-                    is_missing = True
-                elif positive and not has_positive:
-                    is_missing = True
-
+                is_missing = bool(has_negative or (positive and not has_positive))
                 if is_missing:
                     missing_confidences.append(person.confidence)
 
@@ -157,8 +172,19 @@ class ConstructionViolationChecker(BaseViolationChecker):
                 ppe_state.last_alert_time = now
                 confidence = max(missing_confidences, default=0.0)
                 violation_type = negative or f"NO-{label}"
-                logger.info("Violation (construction) cam=%d type=%s count=%d", camera_id, violation_type, missing_count)
-                violations.append(ViolationEvent(camera_id=camera_id, violation_type=violation_type, confidence=confidence))
+                logger.info(
+                    "Violation (construction) cam=%d type=%s count=%d",
+                    camera_id,
+                    violation_type,
+                    missing_count,
+                )
+                violations.append(
+                    ViolationEvent(
+                        camera_id=camera_id,
+                        violation_type=violation_type,
+                        confidence=confidence,
+                    )
+                )
 
         return violations
 
@@ -169,8 +195,9 @@ class ConstructionViolationChecker(BaseViolationChecker):
 class MedicalViolationChecker(BaseViolationChecker):
     """
     Frame-level:
-    - المخالفة لما class السالب يظهر (no mask / no hand gloves / no head cap)
-    - persist قصير لأن الكشف صريح مش استنتاج غياب
+    - المخالفة لما الكلاس السالب يظهر (no mask / no hand gloves / no head cap / no goggle)
+      أو عندما تغيب فئة موجبة فقط (مثل lab coat / full cover / shoe cover) مع وجود كشف في الكادر.
+    - persist قصير لأن الكشف صريح
     - grace: فريم أو اثنين من غير سالب مش بيصفروا التايمر
     """
 
@@ -194,7 +221,7 @@ class MedicalViolationChecker(BaseViolationChecker):
         self,
         camera_id: int,
         detections: list[Detection],
-        enabled_classes: Optional[list[str]] = None,
+        enabled_classes: list[str] | None = None,
     ) -> list[ViolationEvent]:
         profile: Profile = "medical"
         enabled_classes = sanitize_enabled_classes(profile, enabled_classes)
@@ -213,24 +240,34 @@ class MedicalViolationChecker(BaseViolationChecker):
             if not cfg:
                 continue
 
+            label = cfg.get("label") or ppe_key
+            positive = cfg.get("positive")
             negative = cfg.get("negative")
-            if not negative:
+            ppe_state = state.state_for(ppe_key)
+
+            if negative:
+                neg_key = _norm_name(negative)
+                neg_confs = [d.confidence for d in detections if _norm_name(d.class_name) == neg_key]
+                is_violating = len(neg_confs) > 0
+                confidence = max(neg_confs) if neg_confs else 0.0
+                violation_type = negative
+            elif positive:
+                pos_key = _norm_name(positive)
+                has_positive = any(_norm_name(d.class_name) == pos_key for d in detections)
+                # لا نعتبر الفئة الموجبة غائبة إلا إذا كان هناك كشف لأشخاص/عناصر أخرى بالكادر
+                is_violating = len(detections) > 0 and not has_positive
+                confidence = max((d.confidence for d in detections), default=0.0)
+                violation_type = f"no {label}"
+            else:
                 continue
 
-            ppe_state = state.state_for(ppe_key)
-            neg_key = _norm_name(negative)
-            neg_confs = [d.confidence for d in detections if _norm_name(d.class_name) == neg_key]
-            has_negative = len(neg_confs) > 0
-
-            if has_negative:
+            if is_violating:
                 ppe_state.last_negative_time = now
                 time_missing = now - ppe_state.last_seen_time
                 time_since_alert = now - ppe_state.last_alert_time
 
                 if time_missing >= self.persist_seconds and time_since_alert >= self.cooldown_seconds:
                     ppe_state.last_alert_time = now
-                    confidence = max(neg_confs) if neg_confs else 0.0
-                    violation_type = negative
                     logger.info(
                         "Violation (medical) cam=%d type=%s conf=%.2f",
                         camera_id,
@@ -252,3 +289,6 @@ class MedicalViolationChecker(BaseViolationChecker):
 
     def reset(self, camera_id: int) -> None:
         self._states.pop(camera_id, None)
+
+
+ViolationChecker = ConstructionViolationChecker

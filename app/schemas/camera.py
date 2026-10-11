@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
-from app.core.ppe import sanitize_enabled_classes, Profile
+from app.core.ppe import sanitize_enabled_classes
 
 CameraProfile = Literal["construction", "medical"]
 
@@ -17,9 +17,9 @@ class CameraCreate(BaseModel):
     source_uri: str = Field(..., min_length=1, max_length=500)
 
     # optional: لو user.sector != both هنفرضها من السيرفر
-    profile: Optional[CameraProfile] = None
+    profile: CameraProfile | None = None
 
-    enabled_classes: Optional[list[str]] = None
+    enabled_classes: list[str] | None = None
 
     @field_validator("enabled_classes", mode="before")
     @classmethod
@@ -29,9 +29,9 @@ class CameraCreate(BaseModel):
 
 
 class CameraUpdate(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    source_uri: Optional[str] = Field(None, min_length=1, max_length=500)
-    enabled_classes: Optional[list[str]] = None
+    name: str | None = Field(None, min_length=1, max_length=100)
+    source_uri: str | None = Field(None, min_length=1, max_length=500)
+    enabled_classes: list[str] | None = None
 
     @field_validator("enabled_classes", mode="before")
     @classmethod

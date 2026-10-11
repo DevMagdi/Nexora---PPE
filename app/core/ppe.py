@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional, Literal
+from typing import Literal
 
 Profile = Literal["construction", "medical"]
 
-PPE_CLASS_MAPS: dict[Profile, dict[str, dict[str, Optional[str]]]] = {
+PPE_CLASS_MAPS: dict[Profile, dict[str, dict[str, str | None]]] = {
     "construction": {
         "helmet": {"label": "Hardhat", "positive": "Hardhat", "negative": "NO-Hardhat"},
         "vest": {"label": "Safety Vest", "positive": "Safety Vest", "negative": "NO-Safety Vest"},
@@ -19,7 +19,7 @@ PPE_CLASS_MAPS: dict[Profile, dict[str, dict[str, Optional[str]]]] = {
         "gloves": {"label": "hand gloves", "positive": "hand gloves", "negative": "no hand gloves"},
         "cap": {"label": "head cap", "positive": "head cap", "negative": "no head cap"},
         "goggles": {"label": "goggle", "positive": "goggle", "negative": "no goggle"},
-        # optional (no negative class in dataset)
+        # optional (no negative class in dataset — checked via absence when staff detected)
         "coat": {"label": "lab coat", "positive": "lab coat", "negative": None},
         "full_cover": {"label": "full cover", "positive": "full cover", "negative": None},
         "shoe_cover": {"label": "shoe cover", "positive": "shoe cover", "negative": None},
@@ -60,7 +60,7 @@ def default_enabled(profile: Profile) -> list[str]:
     return DEFAULT_ENABLED_BY_PROFILE[profile].copy()
 
 
-def sanitize_enabled_classes(profile: Profile, value: Optional[list[str]]) -> list[str]:
+def sanitize_enabled_classes(profile: Profile, value: list[str] | None) -> list[str]:
     """يرجع قائمة سليمة دائمًا، ولو None يرجع default."""
     if not value or not isinstance(value, list):
         return default_enabled(profile)

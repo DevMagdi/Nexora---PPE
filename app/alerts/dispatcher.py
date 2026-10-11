@@ -29,7 +29,7 @@ class AlertDispatcher:
             *[self._run(h, violation) for h in self.handlers],
             return_exceptions=True,
         )
-        for handler, result in zip(self.handlers, results):
+        for handler, result in zip(self.handlers, results, strict=False):
             if isinstance(result, Exception):
                 logger.error("Handler %s raised: %s", handler.handler_type, result)
 

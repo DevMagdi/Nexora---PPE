@@ -44,13 +44,8 @@ async def create_camera(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # enforce profile based on user.sector
-    if user.sector != "both":
-        profile = user.sector
-    else:
-        profile = body.profile or "construction"
-
-    enabled = sanitize_enabled_classes(profile, body.enabled_classes)
+    profile = user.sector if user.sector != "both" else body.profile or "construction"
+    enabled = sanitize_enabled_classes(profile, body.enabled_classes)  # type: ignore[arg-type]
 
     cam = Camera(
         name=body.name,
@@ -103,7 +98,7 @@ async def update_camera(
     if body.source_uri is not None:
         cam.source_uri = body.source_uri
     if body.enabled_classes is not None:
-        cam.enabled_classes = sanitize_enabled_classes(cam.profile, body.enabled_classes)
+        cam.enabled_classes = sanitize_enabled_classes(cam.profile, body.enabled_classes)  # type: ignore[arg-type]
 
     await db.commit()
     await db.refresh(cam)
@@ -150,12 +145,20 @@ async def start_camera(
     manager: CameraManager = get_camera_manager(request)
 
     try:
-        ok = await manager.start_camera(camera_id, cam.profile, cam.source_type, cam.source_uri, cam.enabled_classes)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        ok = await manager.start_camera(
+            camera_id,
+            cam.profile,  # type: ignore[arg-type]
+            cam.source_type,
+            cam.source_uri,
+            cam.enabled_classes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not ok:
-        raise HTTPException(status_code=400, detail="Failed to start camera (check source URI)")
+        raise HTTPException(
+            status_code=400, detail="Failed to start camera (check source URI)"
+        )
 
     cam.is_active = True
     await db.commit()
