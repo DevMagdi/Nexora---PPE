@@ -1,154 +1,149 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { CameraCreatePayload, CameraUpdatePayload } from "@/types"
 import {
-  getHealth,
-  getPPEClasses,
-  getPPEClassesMeta,
-  getCameras,
-  getCamera,
   createCamera,
-  updateCamera,
   deleteCamera,
+  downloadViolationsCsv,
+  getCameras,
+  getHealth,
+  getPPEClassesMeta,
+  getViolations,
+  login,
+  me,
+  resolveViolation,
+  setToken,
   startCamera,
   stopCamera,
-  getViolations,
-  resolveViolation,
+  updateCamera,
 } from "@/lib/api"
-import type { CameraCreatePayload, CameraUpdatePayload } from "@/types"
 
-// ── Query Keys ───────────────────────────────────────────────────
-export const queryKeys = {
-  health: ["health"] as const,
-
-  // PPE
-  ppeClassesMeta: ["ppe-classes-meta"] as const,
-  ppeClasses: ["ppe-classes"] as const,
-
-  // Cameras
-  cameras: ["cameras"] as const,
-  camera: (id: number) => ["cameras", id] as const,
-
-  // Violations
-  violations: (params?: Record<string, unknown>) => ["violations", params ?? {}] as const,
+export function useMe() {
+  return useQuery({
+    queryKey: ["me"],
+    queryFn: me,
+    retry: false,
+    staleTime: 30_000,
+  })
 }
 
-// ── Health ───────────────────────────────────────────────────────
+export function useLogin() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (vars: { username: string; password: string }) => {
+      const res = await login(vars.username, vars.password)
+      setToken(res.access_token)
+      return res
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["me"] })
+      await qc.invalidateQueries({ queryKey: ["cameras"] })
+      await qc.invalidateQueries({ queryKey: ["ppe-meta"] })
+      await qc.invalidateQueries({ queryKey: ["health"] })
+    },
+  })
+}
+
 export function useHealth() {
   return useQuery({
-    queryKey: queryKeys.health,
+    queryKey: ["health"],
     queryFn: getHealth,
-    refetchInterval: 5000,
-    retry: false,
+    refetchInterval: 10_000,
   })
 }
 
-// ── PPE Classes ──────────────────────────────────────────────────
-export function usePPEClassesMeta() {
+export function usePPEClassesMeta(profile?: "construction" | "medical", enabled = true) {
   return useQuery({
-    queryKey: queryKeys.ppeClassesMeta,
-    queryFn: getPPEClassesMeta,
-    staleTime: Infinity,
+    queryKey: ["ppe-meta", profile ?? "auto"],
+    queryFn: () => getPPEClassesMeta(profile),
+    staleTime: 60_000,
+    enabled,
   })
 }
 
-export function usePPEClasses() {
-  return useQuery({
-    queryKey: queryKeys.ppeClasses,
-    queryFn: getPPEClasses,
-    staleTime: Infinity,
-  })
-}
-
-// ── Cameras ──────────────────────────────────────────────────────
 export function useCameras() {
   return useQuery({
-    queryKey: queryKeys.cameras,
+    queryKey: ["cameras"],
     queryFn: getCameras,
-    refetchInterval: 5000,
-  })
-}
-
-export function useCamera(id: number | null) {
-  return useQuery({
-    queryKey: queryKeys.camera(id ?? -1),
-    queryFn: () => getCamera(id as number),
-    enabled: id !== null,
+    refetchInterval: 5_000,
   })
 }
 
 export function useCreateCamera() {
-  const queryClient = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: (payload: CameraCreatePayload) => createCamera(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.cameras })
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["cameras"] })
     },
   })
 }
 
 export function useUpdateCamera() {
-  const queryClient = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: CameraUpdatePayload }) =>
-      updateCamera(id, payload),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.cameras })
-      queryClient.invalidateQueries({ queryKey: queryKeys.camera(variables.id) })
+    mutationFn: (vars: { id: number; payload: CameraUpdatePayload }) => updateCamera(vars.id, vars.payload),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["cameras"] })
     },
   })
 }
 
 export function useDeleteCamera() {
-  const queryClient = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => deleteCamera(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.cameras })
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["cameras"] })
     },
   })
 }
 
 export function useStartCamera() {
-  const queryClient = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => startCamera(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.cameras })
+    mutationFn: async (id: number) => {
+      await startCamera(id)
+      return id
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["cameras"] })
     },
   })
 }
 
 export function useStopCamera() {
-  const queryClient = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => stopCamera(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.cameras })
+    mutationFn: async (id: number) => {
+      await stopCamera(id)
+      return id
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["cameras"] })
     },
   })
 }
 
-// ── Violations ───────────────────────────────────────────────────
-export function useViolations(params?: {
-  camera_id?: number
-  violation_type?: string
-  page?: number
-  page_size?: number
-}) {
+export function useViolations(params?: Parameters<typeof getViolations>[0]) {
   return useQuery({
-    queryKey: queryKeys.violations(params as any),
+    queryKey: ["violations", params ?? {}],
     queryFn: () => getViolations(params),
-    refetchInterval: 5000,
+    refetchInterval: 10_000,
   })
 }
 
-// ✅ جديد: تأكيد معالجة المخالفة. بنعمل invalidate لكل queries المخالفات
-// (بغض النظر عن الفلاتر) عشان الشاشة تتحدث فورًا أيًا كان التاب المفتوح.
 export function useResolveViolation() {
-  const queryClient = useQueryClient()
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => resolveViolation(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["violations"] })
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["violations"] })
     },
+  })
+}
+
+export function useExportViolations() {
+  return useMutation({
+    mutationFn: (params?: Parameters<typeof downloadViolationsCsv>[0]) => downloadViolationsCsv(params),
   })
 }

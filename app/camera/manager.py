@@ -17,8 +17,8 @@ from app.core.config import settings
 from app.core.detector import PPEDetector
 from app.core.frame_annotator import annotate_frame
 from app.core.logging import get_logger
-from app.core.ppe import sanitize_enabled_classes
-from app.core.violation_checker import ViolationChecker
+from app.core.ppe import sanitize_enabled_classes, Profile
+from app.core.violation_checker import ConstructionViolationChecker, MedicalViolationChecker, BaseViolationChecker
 from app.db.repository import record_alert_log, save_violation
 
 logger = get_logger(__name__)
@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 @dataclass
 class _CameraEntry:
     camera_id: int
+    profile: Profile
     source: CameraSource
     enabled_classes: list[str] = field(default_factory=list)
     task: asyncio.Task | None = None
@@ -36,31 +37,25 @@ class _CameraEntry:
 
 
 class CameraManager:
-    """
-    بيدير دورة حياة كل الكاميرات الشغالة: تشغيل/إيقاف، قراءة الفريمات،
-    تشغيل الديتكشن، فحص المخالفات، حفظ الفريم + إرسال التنبيهات،
-    وبث النتائج لأي WebSocket subscriber. وكمان بينضف فريمات المخالفات
-    القديمة بشكل دوري عشان القرص متمتلئش.
-    """
+    def __init__(self, detectors: dict[str, PPEDetector]) -> None:
+        self.detectors = detectors
 
-    def __init__(self, detector: PPEDetector) -> None:
-        self.detector = detector
         self._entries: dict[int, _CameraEntry] = {}
-        self._checker = ViolationChecker(
-            cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
-            persist_seconds=settings.VIOLATION_PERSIST_SECONDS,
-        )
         self._ws_subscribers: dict[int, list[asyncio.Queue]] = {}
         self._cleanup_task: asyncio.Task | None = None
-
-        # قفل لكل كاميرا: يمنع إن طلبين متزامنين (دبل كليك "تشغيل")
-        # يعدّوا فحص "هل شغالة بالفعل؟" مع بعض قبل ما أي حد يسجل نفسه،
-        # وده كان بيولّد Task شغالة مش متتبّعة ومفيش طريقة توقفها.
         self._locks: dict[int, asyncio.Lock] = {}
 
-        # ✅ الـ handlers بتتبني مرة واحدة بس هنا (مش جوه _process_loop
-        # زي قبل كده). كانت بتتعمل instantiate من جديد كل فريم (25-30
-        # مرة في الثانية لكل كاميرا)، وده تكلفة غير ضرورية بالمرة.
+        self._checkers: dict[str, BaseViolationChecker] = {
+            "construction": ConstructionViolationChecker(
+                cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
+                persist_seconds=settings.VIOLATION_PERSIST_SECONDS,
+            ),
+            "medical": MedicalViolationChecker(
+                cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
+                persist_seconds=settings.MEDICAL_VIOLATION_PERSIST_SECONDS,
+            ),
+        }
+
         self._dispatcher = AlertDispatcher(self._build_alert_handlers())
 
     def _build_alert_handlers(self) -> list[AlertHandler]:
@@ -89,12 +84,9 @@ class CameraManager:
             logger.warning("Could not load active cameras from DB: %s", exc)
             cameras = []
 
-        # كل كاميرا بمحاولتها الخاصة: قبل كده لو كاميرا واحدة فشلت
-        # (مثلاً RTSP مش متاح وقت الريستارت)، الاستثناء كان بيوقف الـ for
-        # loop كله ويمنع استرجاع باقي الكاميرات الشغالة.
         for cam in cameras:
             try:
-                await self._launch_camera(cam.id, cam.source_type, cam.source_uri, cam.enabled_classes)
+                await self._launch_camera(cam.id, cam.profile, cam.source_type, cam.source_uri, cam.enabled_classes)
             except Exception as exc:
                 logger.warning("Failed to restore camera %d on startup: %s", cam.id, exc)
 
@@ -124,12 +116,6 @@ class CameraManager:
     # ------------------------------------------------------------------
 
     def _validate_rtsp_uri(self, uri: str) -> None:
-        """
-        حماية بسيطة من SSRF: لو ALLOWED_RTSP_PREFIXES متظبطة في الإعدادات،
-        منرفضش أي source_uri مش بادئ بواحد من الـ prefixes المسموحة
-        (مثال: "rtsp://192.168.,rtsp://localhost"). لو السيتنج فاضية
-        (الافتراضي)، منحطش أي قيود (backward compatible تمامًا).
-        """
         allowed = [p.strip() for p in settings.ALLOWED_RTSP_PREFIXES.split(",") if p.strip()]
         if not allowed:
             return
@@ -166,6 +152,7 @@ class CameraManager:
     async def _launch_camera(
         self,
         camera_id: int,
+        profile: Profile,
         source_type: str,
         source_uri: str,
         enabled_classes: list[str] | None = None,
@@ -186,22 +173,24 @@ class CameraManager:
 
             entry = _CameraEntry(
                 camera_id=camera_id,
+                profile=profile,
                 source=source,
-                enabled_classes=sanitize_enabled_classes(enabled_classes),
+                enabled_classes=sanitize_enabled_classes(profile, enabled_classes),
             )
             self._entries[camera_id] = entry
             entry.task = asyncio.create_task(self._process_loop(entry), name=f"camera-{camera_id}")
-            logger.info("Camera %d processing started", camera_id)
+            logger.info("Camera %d processing started (profile=%s)", camera_id, profile)
             return True
 
     async def start_camera(
         self,
         camera_id: int,
+        profile: Profile,
         source_type: str,
         source_uri: str,
         enabled_classes: list[str] | None = None,
     ) -> bool:
-        return await self._launch_camera(camera_id, source_type, source_uri, enabled_classes)
+        return await self._launch_camera(camera_id, profile, source_type, source_uri, enabled_classes)
 
     async def stop_camera(self, camera_id: int) -> bool:
         async with self._get_lock(camera_id):
@@ -218,53 +207,66 @@ class CameraManager:
 
             await entry.source.release()
             self._entries.pop(camera_id, None)
-            self._checker.reset(camera_id)
+
+            # reset checker state
+            self._checkers[entry.profile].reset(camera_id)
+
             logger.info("Camera %d stopped", camera_id)
             return True
 
     def update_enabled_classes(self, camera_id: int, enabled_classes: list[str] | None) -> None:
-        """تعديل إعدادات المراقبة لكاميرا شغالة بدون restart."""
         entry = self._entries.get(camera_id)
         if not entry:
             return
-        entry.enabled_classes = sanitize_enabled_classes(enabled_classes)
+        entry.enabled_classes = sanitize_enabled_classes(entry.profile, enabled_classes)
 
     # ------------------------------------------------------------------
-    # Processing loop
+    # Processing
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_counts(detections: list) -> dict:
-        def count(name: str) -> int:
-            return sum(1 for d in detections if d.class_name == name)
+    def _count_by_name(detections: list, name: str) -> int:
+        key = (name or "").strip().lower()
+        return sum(1 for d in detections if (d.class_name or "").strip().lower() == key)
 
-        hardhat_count = count("Hardhat")
-        vest_count = count("Safety Vest")
+    def _compute_counts(self, profile: Profile, detections: list) -> dict:
+        if profile == "construction":
+            return {
+                "hardhat": self._count_by_name(detections, "Hardhat"),
+                "vest": self._count_by_name(detections, "Safety Vest"),
+                "person": self._count_by_name(detections, "Person"),
+                "no_mask": self._count_by_name(detections, "NO-Mask"),
+                "no_gloves": self._count_by_name(detections, "NO-Gloves"),
+                "total": len(detections),
+            }
+        else:
+            return {
+                "no_mask": self._count_by_name(detections, "no mask"),
+                "no_gloves": self._count_by_name(detections, "no hand gloves"),
+                "no_cap": self._count_by_name(detections, "no head cap"),
+                "total": len(detections),
+            }
 
-        return {
-            "hardhat_count": hardhat_count,
-            "helmet_count": hardhat_count,
-            "vest_count": vest_count,
-            "mask_count": count("Mask"),
-            "gloves_count": count("Gloves"),
-            "no_hardhat_count": count("NO-Hardhat"),
-            "no_vest_count": count("NO-Safety Vest"),
-            "no_mask_count": count("NO-Mask"),
-            "person_count": count("Person"),
-            "total_detections": len(detections),
-        }
+    def _stats_lines(self, profile: Profile, counts: dict) -> list[str]:
+        if profile == "construction":
+            return [
+                f"Hardhats: {counts.get('hardhat',0)}",
+                f"Safety Vests: {counts.get('vest',0)}",
+                f"People: {counts.get('person',0)}",
+            ]
+        else:
+            return [
+                f"NO-Mask: {counts.get('no_mask',0)}",
+                f"NO-Gloves: {counts.get('no_gloves',0)}",
+                f"NO-HeadCap: {counts.get('no_cap',0)}",
+            ]
 
     async def _save_violation_frame(self, loop: asyncio.AbstractEventLoop, camera_id: int, frame) -> str:
-        """يحفظ فريم واحد مشترك لكل مخالفات هذه الدورة، ويرجع المسار النسبي له."""
         frame_dir = os.path.join(settings.FRAMES_DIR, f"camera_{camera_id}")
         os.makedirs(frame_dir, exist_ok=True)
-
-        # ✅ timestamp + uuid قصير: بيمنع تضارب الأسماء لو مخالفتين
-        # اتسجلوا بالظبط في نفس الثانية (كان ممكن يحصل مع timestamp وحده).
         fname = f"violation_{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
         abs_path = os.path.join(frame_dir, fname)
         await loop.run_in_executor(None, cv2.imwrite, abs_path, frame)
-
         return f"camera_{camera_id}/{fname}".replace("\\", "/")
 
     async def _handle_violations(self, entry: _CameraEntry, violations: list, frame) -> None:
@@ -278,9 +280,6 @@ class CameraManager:
         for violation in violations:
             violation.frame_path = rel_path
 
-            # 1) نحفظ المخالفة في قاعدة البيانات أولًا عشان ناخد
-            #    violation_id حقيقي، ونربطه بسجلات alert_log بتاعة كل
-            #    قناة تنبيه هتحاول تبعت بعد كده.
             violation_id = await save_violation(violation)
             violation.violation_id = violation_id
             await record_alert_log(
@@ -290,13 +289,14 @@ class CameraManager:
                 error_msg=None if violation_id is not None else "Failed to persist violation row",
             )
 
-            # 2) نبعت التنبيهات (إيميل/ويبهوك/...) بالتوازي — كل واحد
-            #    بيتسجل نتيجته في alert_log تلقائيًا جوه الـ dispatcher.
             await self._dispatcher.dispatch(violation)
 
     async def _process_loop(self, entry: _CameraEntry) -> None:
         camera_id = entry.camera_id
         loop = asyncio.get_running_loop()
+
+        detector = self.detectors[entry.profile]
+        checker = self._checkers[entry.profile]
 
         try:
             while True:
@@ -305,27 +305,23 @@ class CameraManager:
                     await asyncio.sleep(settings.FRAME_READ_RETRY_DELAY_SECONDS)
                     continue
 
-                detections = await loop.run_in_executor(None, self.detector.detect, frame)
-                entry.latest_counts = self._compute_counts(detections)
-
-                # ✅ بترجع list مش عنصر واحد، عشان لو شخص من غير خوذة
-                # وسترة في نفس اللحظة، الاتنين يتسجلوا مش نوع واحد بس.
-                violations = self._checker.check(
-                    camera_id,
-                    detections,
-                    enabled_classes=entry.enabled_classes,
-                )
-
+                detections = await loop.run_in_executor(None, detector.detect, frame)
+                entry.latest_counts = self._compute_counts(entry.profile, detections)
+                # debug: مرة كل 5 ثواني لو فيه كشف أو صفر مستمر
+                now_ts = time.time()
+                if now_ts - getattr(entry, "_last_det_log", 0) >= 5:
+                    entry._last_det_log = now_ts  # type: ignore[attr-defined]
+                    sample = [(d.class_name, round(d.confidence, 2)) for d in detections[:8]]
+                    logger.info("cam=%d profile=%s dets=%s", camera_id, entry.profile, sample)
+                violations = checker.check(camera_id, detections, enabled_classes=entry.enabled_classes)
                 await self._handle_violations(entry, violations, frame)
 
                 show_alert = time.time() < entry.alert_sent_until
                 annotated = annotate_frame(
                     frame,
                     detections,
-                    entry.latest_counts["hardhat_count"],
-                    entry.latest_counts["vest_count"],
-                    entry.latest_counts["person_count"],
-                    show_alert,
+                    stats_lines=self._stats_lines(entry.profile, entry.latest_counts),
+                    show_alert_sent=show_alert,
                 )
                 resized = cv2.resize(annotated, (640, 480))
                 _, jpeg = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -340,15 +336,10 @@ class CameraManager:
             logger.exception("Error in camera %d processing loop: %s", camera_id, exc)
 
     # ------------------------------------------------------------------
-    # Frame cleanup (background task)
+    # Cleanup
     # ------------------------------------------------------------------
 
     async def _cleanup_loop(self) -> None:
-        """
-        بتنضف فريمات المخالفات الأقدم من MAX_FRAME_AGE_DAYS كل
-        FRAME_CLEANUP_INTERVAL_HOURS، عشان القرص متمتلئش مع الوقت.
-        قبل كده الصور كانت بتتراكم للأبد من غير أي تنظيف.
-        """
         while True:
             try:
                 await self._cleanup_old_frames()
@@ -409,10 +400,6 @@ class CameraManager:
     def is_running(self, camera_id: int) -> bool:
         entry = self._entries.get(camera_id)
         return entry is not None and entry.task is not None and not entry.task.done()
-
-    # ------------------------------------------------------------------
-    # Public snapshots (بدل ما الـ routes توصل لـ self._entries مباشرة)
-    # ------------------------------------------------------------------
 
     def active_count(self) -> int:
         return sum(1 for cid in self._entries if self.is_running(cid))

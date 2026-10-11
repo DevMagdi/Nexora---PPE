@@ -11,13 +11,14 @@ import {
   useCameras,
   useDeleteCamera,
   useHealth,
+  useMe,
   usePPEClassesMeta,
   useResolveViolation,
   useStartCamera,
   useStopCamera,
   useViolations,
 } from "@/hooks/useNexora"
-import { getMjpegStreamUrl, getWebSocketUrl, getViolationsExportUrl } from "@/lib/api"
+import { api, clearToken, getMjpegStreamUrl, getWebSocketUrl } from "@/lib/api"
 import nexoraLogoColor from "@/assets/logo/nexora-logo-full-color.svg"
 import nexoraLogoWhite from "@/assets/logo/nexora-logo-full-white.svg"
 import {
@@ -80,21 +81,27 @@ type Camera = NonNullable<ReturnType<typeof useCameras>["data"]>[number]
 type Violation = NonNullable<ReturnType<typeof useViolations>["data"]>["items"][number]
 type ToastState = { id: number; tone: "success" | "error"; text: string }
 
+/** الشكل الفعلي لرسالة الـ WS من CameraManager._compute_counts */
 type LiveCounts = {
-  hardhat_count?: number
-  vest_count?: number
-  person_count?: number
-  total_detections?: number
+  hardhat?: number
+  vest?: number
+  person?: number
+  no_mask?: number
+  no_gloves?: number
+  no_cap?: number
+  total?: number
 }
+
+type LiveMetricItem = { value: number | undefined; label: string }
 
 /* ─── Constants ─── */
 
-const LOCALE = "ar-EG-u-nu-latn" // عربي بأرقام لاتينية متسقة في كل الواجهة
+const LOCALE = "ar-EG-u-nu-latn"
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
 const VIOLATIONS_FETCH_LIMIT = 200
 const TABLE_PAGE_SIZE = 25
-const MAX_GRID_PREVIEWS = 4 // أقصى عدد بثوث معاينة متزامنة (المتصفح بيسمح بحوالي 6 اتصالات لكل سيرفر)
+const MAX_GRID_PREVIEWS = 4
 
 const CHART_HEX = {
   green: "var(--chart-green)",
@@ -105,29 +112,18 @@ const CHART_HEX = {
 }
 const PIE_COLORS = [CHART_HEX.green, CHART_HEX.blue, CHART_HEX.amber, CHART_HEX.purple, CHART_HEX.red]
 
-/** مؤقتًا بيقرأ المستخدم من localStorage["nexora-user"] = {"name","role"}؛ بدّله ببيانات تسجيل الدخول لما يجهز */
-function getCurrentUser() {
-  try {
-    const raw = localStorage.getItem("nexora-user")
-    const u = raw ? JSON.parse(raw) : null
-    if (u?.name) return { name: String(u.name), role: String(u.role ?? "") }
-  } catch {
-    /* بيانات غير صالحة، نتجاهلها */
-  }
-  return { name: "مستخدم Nexora", role: "حساب محلي" }
+const SECTOR_LABEL: Record<string, string> = {
+  construction: "قطاع الإنشاءات",
+  medical: "القطاع الطبي",
+  both: "إدارة عامة",
 }
-const CURRENT_USER = getCurrentUser()
 
-const CORE_KEYWORDS = ["hardhat", "helmet", "vest", "mask"]
-
-/**
- * يحوّل أي صيغة لنوع المخالفة (NO-Hardhat / no_hardhat / NO Hardhat...)
- * لمفتاح موحّد (حروف صغيرة + بدون رموز) عشان المقارنة تبقى موثوقة
- * بغض النظر عن الصيغة اللي راجعة من الـ backend فعليًا.
- */
-function normalizeViolationKey(type: string): string {
-  return type.toLowerCase().replace(/[^a-z]/g, "")
+const PROFILE_LABEL: Record<string, string> = {
+  construction: "إنشاءات",
+  medical: "طبي",
 }
+
+const CORE_KEYWORDS = ["hardhat", "helmet", "vest", "mask", "glove", "cap", "goggle", "boot", "coat"]
 
 const VIOLATION_LABELS: Record<string, string> = {
   nohardhat: "بدون خوذة",
@@ -136,11 +132,15 @@ const VIOLATION_LABELS: Record<string, string> = {
   novest: "بدون سترة عاكسة",
   nomask: "بدون كمامة",
   nogloves: "بدون قفازات",
+  nohandgloves: "بدون قفازات",
   nogoggles: "بدون نظارات واقية",
+  nogoggle: "بدون نظارات واقية",
   nosafetyboots: "بدون حذاء أمان",
   noboots: "بدون حذاء أمان",
   nolabcoat: "بدون بالطو واقي",
   nocoat: "بدون بالطو واقي",
+  noheadcap: "بدون غطاء رأس",
+  nocap: "بدون غطاء رأس",
 }
 
 const TAB_TITLES: Record<TabKey, string> = {
@@ -160,14 +160,32 @@ const TONE_CLASSES: Record<ToneKey, { chip: string; text: string }> = {
 
 /* ─── Helpers ─── */
 
+function cameraProfile(c: { profile?: string } | null | undefined): "construction" | "medical" {
+  return c?.profile === "medical" ? "medical" : "construction"
+}
+
 function isCoreType(type: string) {
   return CORE_KEYWORDS.some((k) => type.toLowerCase().includes(k))
 }
 
-/** اسم عربي لنوع المخالفة مع fallback على بيانات الـ API ثم النص الخام */
+function normalizeViolationKey(type: string): string {
+  return type.toLowerCase().replace(/[^a-z]/g, "")
+}
+
 function violationLabel(type: string, ppeLabels: Map<string, string>) {
   const key = normalizeViolationKey(type)
   return VIOLATION_LABELS[key] ?? ppeLabels.get(type) ?? type.replace(/[_-]+/g, " ")
+}
+
+/**
+ * الباك بيخزّن utc_now() كـ naive UTC من غير Z.
+ * JS بيقرأ "2026-10-11T16:33:00" كـ local، فبنفرض UTC لو مفيش timezone.
+ */
+function parseTs(ts: string) {
+  const s = String(ts ?? "").trim()
+  if (!s) return new Date(NaN)
+  if (/Z$|[+-]\d{2}:?\d{2}$/.test(s)) return new Date(s)
+  return new Date(s.replace(" ", "T") + "Z")
 }
 
 function iso(d: Date) {
@@ -179,16 +197,16 @@ function formatClock(ms: number) {
 }
 
 function formatDate(ts: string) {
-  return new Date(ts).toLocaleDateString(LOCALE, { day: "2-digit", month: "short", year: "numeric" })
+  return parseTs(ts).toLocaleDateString(LOCALE, { day: "2-digit", month: "short", year: "numeric" })
 }
 
 function formatTime(ts: string) {
-  return new Date(ts).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  return parseTs(ts).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
 }
 
 const relativeFormatter = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" })
 function formatRelative(ts: string, now: number) {
-  const diffSec = (new Date(ts).getTime() - now) / 1000
+  const diffSec = (parseTs(ts).getTime() - now) / 1000
   const abs = Math.abs(diffSec)
   if (abs < 45) return "الآن"
   if (abs < 3600) return relativeFormatter.format(Math.round(diffSec / 60), "minute")
@@ -196,20 +214,75 @@ function formatRelative(ts: string, now: number) {
   return relativeFormatter.format(Math.round(diffSec / 86400), "day")
 }
 
-/** يخفي اسم المستخدم وكلمة المرور من روابط RTSP قبل عرضها */
 function maskUri(uri?: string | null) {
   if (!uri) return ""
   return uri.replace(/\/\/([^@/]+)@/, "//•••@")
 }
 
-/** نسبة الالتزام بالخوذة = الخوذات ÷ الأشخاص (undefined لو مفيش أشخاص أو مفيش بيانات) */
-function computeCompliance(c: LiveCounts) {
-  const persons = c.person_count ?? 0
-  if (persons <= 0 || c.hardhat_count === undefined) return undefined
-  return Math.round(Math.min(1, c.hardhat_count / persons) * 100)
+function n(v: unknown): number | undefined {
+  const x = Number(v)
+  return Number.isFinite(x) ? x : undefined
 }
 
-/** يضيف query params لرابط (مطلق أو نسبي) من غير ما يكسر الـ params الموجودة */
+/** يوحّد payload الـ WS (مفاتيح الباك الحالية + القديمة) */
+function normalizeLiveCounts(raw: unknown): LiveCounts | null {
+  if (!raw || typeof raw !== "object") return null
+  const d = raw as Record<string, unknown>
+  if (d.ping) return null
+  return {
+    hardhat: n(d.hardhat ?? d.hardhat_count),
+    vest: n(d.vest ?? d.vest_count),
+    person: n(d.person ?? d.person_count),
+    no_mask: n(d.no_mask),
+    no_gloves: n(d.no_gloves),
+    no_cap: n(d.no_cap),
+    total: n(d.total ?? d.total_detections),
+  }
+}
+
+function computeCompliance(profile: string | undefined, c: LiveCounts) {
+  if (profile === "medical") return undefined
+  const persons = c.person ?? 0
+  if (persons <= 0 || c.hardhat === undefined) return undefined
+  return Math.round(Math.min(1, c.hardhat / persons) * 100)
+}
+
+function liveMetrics(profile: string | undefined, c: LiveCounts): LiveMetricItem[] {
+  if (profile === "medical") {
+    return [
+      { value: c.no_mask, label: "بدون كمامة" },
+      { value: c.no_gloves, label: "بدون قفازات" },
+      { value: c.no_cap, label: "بدون غطاء رأس" },
+      { value: c.total, label: "إجمالي الكشف" },
+    ]
+  }
+  return [
+    { value: c.person, label: "أشخاص" },
+    { value: c.hardhat, label: "خوذات" },
+    { value: c.vest, label: "سترات" },
+  ]
+}
+
+function sideMetricIcon(label: string) {
+  if (label === "أشخاص") return <Users className="size-4 text-info" />
+  if (label === "خوذات") return <HardHat className="size-4 text-warning" />
+  if (label === "سترات") return <Shirt className="size-4 text-highlight" />
+  if (label === "إجمالي الكشف") return <Boxes className="size-4 text-primary" />
+  if (label.includes("كمامة")) return <ShieldAlert className="size-4 text-destructive" />
+  if (label.includes("قفاز")) return <ShieldAlert className="size-4 text-destructive" />
+  if (label.includes("غطاء")) return <HardHat className="size-4 text-warning" />
+  return <Boxes className="size-4 text-primary" />
+}
+
+/** الباك بيرجع /frames/{frame_path} خارج /api/v1 */
+function resolveFrameUrl(frameUrl?: string | null): string | null {
+  if (!frameUrl) return null
+  if (/^https?:\/\//i.test(frameUrl)) return frameUrl
+  const path = frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`
+  const origin = String(import.meta.env.VITE_API_ORIGIN ?? "").replace(/\/$/, "")
+  return origin ? `${origin}${path}` : path
+}
+
 function withParams(url: string, params: Record<string, string | undefined>) {
   try {
     const isAbsolute = /^[a-z][a-z\d+.-]*:/i.test(url)
@@ -235,10 +308,10 @@ function tooltipStyle() {
     direction: "rtl" as const,
   }
 }
-/** formatters متوافقة مع أنواع recharts v3 (value ممكن تكون undefined، و label هي ReactNode) */
+
 function countFormatter(value: unknown, name?: unknown): [string, string] {
-  const n = Array.isArray(value) ? value.length : Number(value ?? 0)
-  return [`${Number.isFinite(n) ? n : 0} مخالفة`, name ? String(name) : ""]
+  const num = Array.isArray(value) ? value.length : Number(value ?? 0)
+  return [`${Number.isFinite(num) ? num : 0} مخالفة`, name ? String(name) : ""]
 }
 
 function makeLabelFormatter(prefix: string) {
@@ -247,7 +320,6 @@ function makeLabelFormatter(prefix: string) {
 
 /* ─── Hooks ─── */
 
-/** بيقرأ القيمة الصحيحة من أول render عشان السايدبار ميفتحش غلط على الموبايل */
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(() =>
     typeof window !== "undefined" ? window.matchMedia(query).matches : false,
@@ -262,7 +334,6 @@ function useMediaQuery(query: string) {
   return matches
 }
 
-/** عداد متحرك بيكمل من آخر قيمة معروضة فعليًا (مش بيقفز لو الهدف اتغير وسط الحركة) */
 function useCountUp(target: number | undefined, duration = 700) {
   const [value, setValue] = useState(0)
   const currentRef = useRef(0)
@@ -292,7 +363,6 @@ function useCountUp(target: number | undefined, duration = 700) {
   return target === undefined ? undefined : value
 }
 
-/** بيقول لو العنصر ظاهر على الشاشة (لتشغيل معاينات البث الظاهرة فقط) */
 function useInView<T extends Element>() {
   const ref = useRef<T>(null)
   const [inView, setInView] = useState(false)
@@ -306,13 +376,12 @@ function useInView<T extends Element>() {
   return [ref, inView] as const
 }
 
-/** يحتفظ بآخر بيانات وصلت عشان الشاشة متعملش flash وقت تحديث الـ query */
 function useLatest<T>(value: T | undefined) {
   const ref = useRef<T | undefined>(value)
   if (value !== undefined) ref.current = value
   return ref.current
 }
-/** الوضع الفاتح هو الأساسي، والداكن اختياري ومتحفوظ في المتصفح */
+
 function useTheme() {
   const [dark, setDark] = useState(() => {
     try {
@@ -364,7 +433,6 @@ interface StatCardProps {
   featured?: boolean
 }
 
-/** كارت إحصائية: الرقم متحرك، و"—" لو مفيش بيانات بدل صفر مضلل */
 function StatCard({ label, value, icon, tone = "primary", unit, plus, hint, live, featured }: StatCardProps) {
   const animated = useCountUp(value)
   const t = TONE_CLASSES[tone]
@@ -391,7 +459,6 @@ function StatCard({ label, value, icon, tone = "primary", unit, plus, hint, live
   )
 }
 
-/** حلقة نسبة الالتزام: أكبر عنصر في اللوحة، ولونها بيتغير حسب الحالة */
 function ComplianceRing({ value, live, hint }: { value: number | undefined; live: boolean; hint: string }) {
   const animated = useCountUp(value)
   const R = 54
@@ -399,7 +466,12 @@ function ComplianceRing({ value, live, hint }: { value: number | undefined; live
   const v = value ?? 0
   const level = value === undefined ? "none" : v >= 90 ? "good" : v >= 70 ? "warn" : "bad"
   const ringClass = { none: "text-muted-foreground", good: "text-success", warn: "text-warning", bad: "text-destructive" }[level]
-  const textClass = { none: "text-muted-foreground", good: "text-success-foreground", warn: "text-warning-foreground", bad: "text-destructive-foreground" }[level]
+  const textClass = {
+    none: "text-muted-foreground",
+    good: "text-success-foreground",
+    warn: "text-warning-foreground",
+    bad: "text-destructive-foreground",
+  }[level]
   const status = { none: "لا يوجد بث", good: "التزام ممتاز", warn: "يحتاج متابعة", bad: "مستوى خطر" }[level]
   return (
     <Card className="flex h-full flex-col items-center justify-center gap-5 p-6 text-center sm:flex-row sm:text-start lg:flex-col lg:text-center xl:flex-row xl:text-start">
@@ -427,6 +499,30 @@ function ComplianceRing({ value, live, hint }: { value: number | undefined; live
         <div className="flex items-center justify-center gap-2 sm:justify-start lg:justify-center xl:justify-start">
           <h3 className="text-sm font-semibold text-muted-foreground">نسبة الالتزام بالخوذة</h3>
           <LiveDot tone="success" active={live} />
+        </div>
+        <p className={`mt-1.5 text-lg font-bold ${textClass}`}>{status}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+      </div>
+    </Card>
+  )
+}
+
+function MedicalStatusCard({ count, live, hint }: { count: number | undefined; live: boolean; hint: string }) {
+  const animated = useCountUp(count)
+  const level = count === undefined ? "none" : count === 0 ? "good" : "bad"
+  const textClass = {
+    none: "text-muted-foreground",
+    good: "text-success-foreground",
+    bad: "text-destructive-foreground",
+  }[level]
+  const status = { none: "لا يوجد بث", good: "الكادر ملتزم", bad: "مخالفات ظاهرة" }[level]
+  return (
+    <Card className="flex h-full flex-col items-center justify-center gap-5 p-6 text-center sm:flex-row sm:text-start lg:flex-col lg:text-center xl:flex-row xl:text-start">
+      <div className={`text-6xl font-bold tabular-nums ${textClass}`}>{animated === undefined ? "—" : animated}</div>
+      <div className="min-w-0">
+        <div className="flex items-center justify-center gap-2 sm:justify-start lg:justify-center xl:justify-start">
+          <h3 className="text-sm font-semibold text-muted-foreground">مخالفات ظاهرة الآن</h3>
+          <LiveDot tone={level === "bad" ? "destructive" : "success"} active={live} />
         </div>
         <p className={`mt-1.5 text-lg font-bold ${textClass}`}>{status}</p>
         <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
@@ -567,10 +663,7 @@ function NavItem({
       }`}
     >
       {active && (
-        <span
-          aria-hidden="true"
-          className="absolute end-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-s-full bg-primary"
-        />
+        <span aria-hidden="true" className="absolute end-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-s-full bg-primary" />
       )}
       <span
         className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
@@ -610,7 +703,6 @@ function Toast({ toast, onClose }: { toast: ToastState | null; onClose: () => vo
   )
 }
 
-/** رقم متحرك صغير لطبقة البث */
 function LiveMetric({ value, label }: { value: number | undefined; label: string }) {
   const animated = useCountUp(value)
   return (
@@ -630,7 +722,7 @@ const LIVE_STATUS_LABEL: Record<LiveStatus, string> = {
 
 interface LiveStageProps {
   camera: Camera | null
-  counts: LiveCounts
+  metrics: LiveMetricItem[]
   status: LiveStatus
   compliance: number | undefined
   pending: boolean
@@ -639,11 +731,7 @@ interface LiveStageProps {
   onGoCameras: () => void
 }
 
-/**
- * مسرح البث: الـ <img> مفتاحها camera.id فقط، فمش بتتعمل remount مع كل frame.
- * لو البث وقع بيظهر زرار إعادة محاولة بيغيّر الرابط بـ nonce عشان المتصفح يفتح اتصال جديد.
- */
-function LiveStage({ camera, counts, status, compliance, pending, onStart, onStop, onGoCameras }: LiveStageProps) {
+function LiveStage({ camera, metrics, status, compliance, pending, onStart, onStop, onGoCameras }: LiveStageProps) {
   const [streamError, setStreamError] = useState(false)
   const [nonce, setNonce] = useState(0)
 
@@ -692,6 +780,7 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
   }
 
   const streamSrc = withParams(getMjpegStreamUrl(camera.id), nonce ? { r: String(nonce) } : {})
+  const isMedical = cameraProfile(camera) === "medical"
 
   return (
     <>
@@ -716,7 +805,6 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
 
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-[5] shadow-[inset_0_0_140px_rgba(0,0,0,0.5)]" />
 
-      {/* طبقة علوية */}
       <div className="absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/85 via-black/30 to-transparent p-6 pb-14">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -729,7 +817,7 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
               {camera.name}
             </h2>
             <p className="mt-1.5 text-xs text-white/60">
-              المعرّف #{camera.id} · المصدر {camera.source_type}
+              المعرّف #{camera.id} · {PROFILE_LABEL[cameraProfile(camera)]} · المصدر {camera.source_type}
               {status !== "open" && status !== "idle" && <span className="ms-2 text-warning">{LIVE_STATUS_LABEL[status]}</span>}
             </p>
           </div>
@@ -743,29 +831,30 @@ function LiveStage({ camera, counts, status, compliance, pending, onStart, onSto
         </div>
       </div>
 
-      {/* طبقة سفلية */}
       <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/95 via-black/50 to-transparent p-6 pt-14">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="grid grid-cols-4 gap-2.5 text-xs">
-            <LiveMetric value={counts.person_count} label="أشخاص" />
-            <LiveMetric value={counts.hardhat_count} label="خوذات" />
-            <LiveMetric value={counts.vest_count} label="سترات" />
-            <div className="rounded-xl bg-white/10 px-3.5 py-2 ring-1 ring-white/15 backdrop-blur-md">
-              <div
-                className={`text-base font-bold tabular-nums ${
-                  compliance === undefined
-                    ? "text-white"
-                    : compliance >= 90
-                      ? "text-success"
-                      : compliance >= 70
-                        ? "text-warning"
-                        : "text-destructive"
-                }`}
-              >
-                {compliance === undefined ? "—" : `${compliance}%`}
+            {metrics.map((m) => (
+              <LiveMetric key={m.label} value={m.value} label={m.label} />
+            ))}
+            {!isMedical && (
+              <div className="rounded-xl bg-white/10 px-3.5 py-2 ring-1 ring-white/15 backdrop-blur-md">
+                <div
+                  className={`text-base font-bold tabular-nums ${
+                    compliance === undefined
+                      ? "text-white"
+                      : compliance >= 90
+                        ? "text-success"
+                        : compliance >= 70
+                          ? "text-warning"
+                          : "text-destructive"
+                  }`}
+                >
+                  {compliance === undefined ? "—" : `${compliance}%`}
+                </div>
+                <div className="mt-0.5 text-white/70">التزام</div>
               </div>
-              <div className="mt-0.5 text-white/70">التزام</div>
-            </div>
+            )}
           </div>
           <Button
             type="button"
@@ -796,7 +885,6 @@ interface CameraCardProps {
   onDelete: () => void
 }
 
-/** كارت كاميرا: بيفتح بث المعاينة فقط لو الكارت ظاهر على الشاشة وضمن حد الاتصالات */
 function CameraCard({
   camera,
   ppeLabels,
@@ -846,7 +934,12 @@ function CameraCard({
 
         <div className="flex flex-1 flex-col p-5">
           <div className="mb-3">
-            <h3 className="truncate text-base font-bold text-foreground transition-colors group-hover:text-primary">{camera.name}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="truncate text-base font-bold text-foreground transition-colors group-hover:text-primary">{camera.name}</h3>
+              <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+                {PROFILE_LABEL[cameraProfile(camera)]}
+              </span>
+            </div>
             <div
               dir="ltr"
               className="mt-1.5 inline-block max-w-full truncate rounded-lg bg-muted/40 px-2 py-1 text-[11px] text-muted-foreground"
@@ -934,9 +1027,11 @@ export default function App() {
   const isMobile = useMediaQuery("(max-width: 1023.98px)")
   const [dark, setDark] = useTheme()
 
+  const { data: meUser } = useMe()
   const { data: health, isLoading: healthLoading, isError: healthError, refetch: refetchHealth } = useHealth()
   const { data: cameras, isLoading: camerasLoading, isError: camerasError, refetch: refetchCameras } = useCameras()
-  const { data: ppeMeta } = usePPEClassesMeta()
+  const { data: ppeMetaC } = usePPEClassesMeta("construction")
+  const { data: ppeMetaM } = usePPEClassesMeta("medical")
 
   const startMut = useStartCamera()
   const stopMut = useStopCamera()
@@ -957,6 +1052,7 @@ export default function App() {
   const [camFilter, setCamFilter] = useState<number | "all">("all")
   const [page, setPage] = useState(1)
   const [addOpen, setAddOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const [editOpen, setEditOpen] = useState(false)
   const [editingCamera, setEditingCamera] = useState<Camera | null>(null)
@@ -969,28 +1065,23 @@ export default function App() {
   const [toast, setToast] = useState<ToastState | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
-  /* ساعة حية، والنافذة الزمنية بتتحدث معاها */
+  const displayName = meUser?.username || "مستخدم Nexora"
+  const displayRole = SECTOR_LABEL[meUser?.sector ?? ""] || "حساب محلي"
+
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000)
     return () => clearInterval(id)
   }, [])
 
-  /* النافذة الزمنية مُقرّبة لأقرب ساعة (يومي) أو يوم (أسبوعي) عشان الـ buckets تبقى منتظمة */
-  const windowEnd = Math.ceil(now / 60_000) * 60_000
   const { from, to } = useMemo(() => {
-    const end = new Date(windowEnd)
-    if (range === "24h") {
-      end.setMinutes(0, 0, 0)
-      end.setTime(end.getTime() + HOUR)
-    } else {
-      end.setHours(0, 0, 0, 0)
-      end.setTime(end.getTime() + DAY)
+    const pad = 3 * HOUR
+    return {
+      from: new Date(now - (range === "24h" ? DAY : 7 * DAY) - pad),
+      to: new Date(now + pad),
     }
-    return { from: new Date(end.getTime() - (range === "24h" ? DAY : 7 * DAY)), to: end }
-  }, [range, windowEnd])
+  }, [range, now])
   const rangeLabel = range === "24h" ? "آخر 24 ساعة" : "آخر 7 أيام"
 
-  /* Toast بيختفي لوحده */
   const notify = useCallback((tone: ToastState["tone"], text: string) => setToast({ id: Date.now(), tone, text }), [])
   useEffect(() => {
     if (!toast) return
@@ -998,7 +1089,6 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
-  /* Debounce لفلتر النوع، وإعادة الصفحة للأول عند تغيير أي فلتر */
   useEffect(() => {
     const t = setTimeout(() => setTypeFilter(typeInput.trim()), 350)
     return () => clearTimeout(t)
@@ -1007,11 +1097,14 @@ export default function App() {
     setPage(1)
   }, [typeFilter, camFilter, showAllTypes, range])
 
-  /* ─── الكاميرات ─── */
-  const ppeLabels = useMemo(
-    () => new Map<string, string>((ppeMeta?.items ?? []).map((it) => [it.key, it.label_ar] as const)),
-    [ppeMeta],
-  )
+  const ppeLabels = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of [...(ppeMetaC?.items ?? []), ...(ppeMetaM?.items ?? [])]) {
+      m.set(it.key, it.label_ar)
+    }
+    return m
+  }, [ppeMetaC, ppeMetaM])
+
   const cameraList = useMemo(() => cameras ?? [], [cameras])
   const cameraName = useCallback(
     (id: number) => cameraList.find((c) => c.id === id)?.name ?? `كاميرا #${id}`,
@@ -1021,13 +1114,11 @@ export default function App() {
   const runningCams = useMemo(() => cameraList.filter((c) => c.is_running), [cameraList])
   const runningCount = runningCams.length
 
-  /* اختيار تلقائي لأول كاميرا شغالة عشان النظرة العامة تعرض أرقام لحظية من أول ثانية */
   useEffect(() => {
     if (selectedCameraId !== null || cameraList.length === 0) return
     setSelectedCameraId((cameraList.find((c) => c.is_running) ?? cameraList[0]).id)
   }, [cameraList, selectedCameraId])
 
-  /* لو الكاميرا المختارة اتحذفت/اختفت: نختار بديل تلقائيًا */
   useEffect(() => {
     if (selectedCameraId === null) return
     if (cameraList.length === 0) {
@@ -1046,7 +1137,6 @@ export default function App() {
     return cameraList.filter((c) => c.name.toLowerCase().includes(q) || String(c.id).includes(q))
   }, [cameraList, cameraSearch])
 
-  /* التحميل خاص بكل كاميرا لوحدها، مش بيقفل كل الأزرار */
   const togglingCamId: number | null =
     startMut.isPending ? (startMut.variables as number) : stopMut.isPending ? (stopMut.variables as number) : null
 
@@ -1108,7 +1198,16 @@ export default function App() {
     [resolveMut, notify],
   )
 
-  /* ─── المخالفات ─── */
+  const handleLogout = useCallback(() => {
+    clearToken()
+    try {
+      localStorage.removeItem("nexora-user")
+    } catch {
+      /* ignore */
+    }
+    window.location.assign("/")
+  }, [])
+
   const baseParams = useMemo(() => ({ page_size: VIOLATIONS_FETCH_LIMIT, from: iso(from), to: iso(to) }), [from, to])
   const tableParams = useMemo(
     () => ({
@@ -1121,7 +1220,6 @@ export default function App() {
 
   const {
     data: overviewData,
-    //isLoading: overviewLoading,
     isError: overviewError,
     refetch: refetchOverview,
   } = useViolations(baseParams)
@@ -1133,15 +1231,13 @@ export default function App() {
     refetch: refetchViolations,
   } = useViolations(tableParams)
 
-  const byNewest = (a: Violation, b: Violation) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  const byNewest = (a: Violation, b: Violation) => parseTs(b.timestamp).getTime() - parseTs(a.timestamp).getTime()
 
-  /* مصدر واحد لكل أرقام النظرة العامة (غير متأثر بفلاتر تاب المخالفات) */
   const overviewRaw = useLatest(overviewData)
   const overviewList = useMemo(() => [...(overviewRaw?.items ?? [])].sort(byNewest), [overviewRaw])
   const coreCount = useMemo(() => overviewList.filter((v) => isCoreType(v.violation_type)).length, [overviewList])
   const overviewCapped = overviewList.length >= VIOLATIONS_FETCH_LIMIT
 
-  /* بيانات الجدول مع pagination محلي */
   const violationsRaw = useLatest(violationsData)
   const filteredList = useMemo(
     () => (violationsRaw?.items ?? []).filter((v) => showAllTypes || isCoreType(v.violation_type)).sort(byNewest),
@@ -1151,7 +1247,6 @@ export default function App() {
   const safePage = Math.min(page, pageCount)
   const pageItems = filteredList.slice((safePage - 1) * TABLE_PAGE_SIZE, safePage * TABLE_PAGE_SIZE)
 
-  /* أنواع المخالفات المعروفة لقائمة الفلتر */
   const knownTypes = useMemo(() => {
     const s = new Set<string>()
     for (const v of overviewList) s.add(v.violation_type)
@@ -1159,18 +1254,39 @@ export default function App() {
     return [...s].sort()
   }, [overviewList, violationsRaw])
 
-  /* التصدير مطابق للفلاتر الظاهرة على الشاشة */
-  const exportUrl = withParams(getViolationsExportUrl(camFilter === "all" ? undefined : camFilter), {
-    from: iso(from),
-    to: iso(to),
-    violation_type: typeFilter || undefined,
-  })
+  const onExport = useCallback(async () => {
+    setExporting(true)
+    try {
+      const { data } = await api.get("/violations/export", {
+        params: {
+          camera_id: camFilter === "all" ? undefined : camFilter,
+          from: iso(from),
+          to: iso(to),
+          violation_type: typeFilter || undefined,
+        },
+        responseType: "blob",
+      })
+      const blob = new Blob([data], { type: "text/csv;charset=utf-8" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "violations.csv"
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      notify("success", "تم تنزيل ملف المخالفات")
+    } catch {
+      notify("error", "تعذّر تصدير المخالفات")
+    } finally {
+      setExporting(false)
+    }
+  }, [camFilter, from, to, typeFilter, notify])
 
-  /* ─── الرسوم البيانية: بالساعة لليوم، وباليوم للأسبوع ─── */
   const series = useMemo(() => {
     const buckets = range === "24h" ? 24 : 7
     const size = range === "24h" ? HOUR : DAY
-    const start = from.getTime()
+    const start = from.getTime() + 3 * HOUR
     const arr = Array.from({ length: buckets }, (_, i) => {
       const d = new Date(start + i * size)
       const label =
@@ -1180,7 +1296,7 @@ export default function App() {
       return { label, count: 0 }
     })
     for (const v of overviewList) {
-      const idx = Math.floor((new Date(v.timestamp).getTime() - start) / size)
+      const idx = Math.floor((parseTs(v.timestamp).getTime() - start) / size)
       if (idx >= 0 && idx < buckets) arr[idx].count++
     }
     return arr
@@ -1195,7 +1311,6 @@ export default function App() {
       .map(([type, value]) => ({ name: violationLabel(type, ppeLabels), value }))
   }, [overviewList, ppeLabels])
 
-  /* ─── WebSocket مع إعادة اتصال تلقائية وتصفير الأرقام عند تغيير الكاميرا ─── */
   useEffect(() => {
     setCounts({})
     if (!selectedCamera?.is_running) {
@@ -1218,10 +1333,12 @@ export default function App() {
       ws.onmessage = (e) => {
         try {
           const d = JSON.parse(e.data)
-          if (typeof d?.person_count === "number" || typeof d?.hardhat_count === "number") setCounts(d)
+          const next = normalizeLiveCounts(d)
+          if (next) setCounts(next)
         } catch {
-          /* رسالة غير صالحة، نتجاهلها */
+          /* رسالة غير صالحة */
         }
+
       }
       ws.onerror = () => ws?.close()
       ws.onclose = () => {
@@ -1238,11 +1355,17 @@ export default function App() {
     }
   }, [selectedCamera?.id, selectedCamera?.is_running])
 
-  const compliance = selectedCamera?.is_running ? computeCompliance(counts) : undefined
-  const liveWorkers = selectedCamera?.is_running ? counts.person_count : undefined
+  const activeProfile = selectedCamera ? cameraProfile(selectedCamera) : meUser?.sector === "medical" ? "medical" : "construction"
+  const isMedicalView = activeProfile === "medical"
+  const compliance = selectedCamera?.is_running ? computeCompliance(activeProfile, counts) : undefined
+  const liveWorkers = selectedCamera?.is_running && !isMedicalView ? counts.person : undefined
+  const medicalNegatives =
+    selectedCamera?.is_running && isMedicalView
+      ? (counts.no_mask ?? 0) + (counts.no_gloves ?? 0) + (counts.no_cap ?? 0)
+      : undefined
+  const overlayMetrics = liveMetrics(activeProfile, selectedCamera?.is_running ? counts : {})
   const camPending = selectedCamera !== null && togglingCamId === selectedCamera.id
 
-  /* ─── الجرس: يعدّ الجديد فقط منذ آخر مرة اتفتح ─── */
   useEffect(() => {
     setSeenCount(null)
   }, [range])
@@ -1256,7 +1379,6 @@ export default function App() {
     setSeenCount(overviewList.length)
   }
 
-  /* Escape يقفل السايدبار والجرس */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -1268,9 +1390,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  /* مفيش dialog فاضي: بيفتح بس لو فيه صورة */
   const openFrame = (url?: string | null) => {
-    if (url) setFrameUrl(url)
+    const resolved = resolveFrameUrl(url)
+    if (resolved) setFrameUrl(resolved)
   }
 
   const navItems: { id: TabKey; icon: ReactNode; badge?: number }[] = [
@@ -1281,9 +1403,9 @@ export default function App() {
   ]
 
   const sidebarHidden = isMobile && !sidebarOpen
-  const serverOk = Boolean(health?.model_loaded) && !healthError
+  const detectorsOk = Boolean(health?.detectors_loaded ?? (health as { model_loaded?: boolean } | undefined)?.model_loaded)
+  const serverOk = detectorsOk && !healthError
 
-  /* ترتيب الكاميرات في تاب الإدارة: الشغالة أولًا، وأول 4 منها بس بيفتحوا بث معاينة */
   const orderedCams = useMemo(() => [...cameraList].sort((a, b) => Number(b.is_running) - Number(a.is_running)), [cameraList])
   const previewAllowed = useMemo(() => {
     const ids = new Set<number>()
@@ -1293,11 +1415,10 @@ export default function App() {
     return ids
   }, [orderedCams])
 
-  /* تنبيهات آخر ساعة لكل كاميرا: بتحدد حالة "تنبيه" على كارت الكاميرا */
   const alertsByCam = useMemo(() => {
     const m = new Map<number, number>()
     for (const v of overviewList) {
-      if (isCoreType(v.violation_type) && now - new Date(v.timestamp).getTime() < HOUR) {
+      if (isCoreType(v.violation_type) && now - parseTs(v.timestamp).getTime() < HOUR) {
         m.set(v.camera_id, (m.get(v.camera_id) ?? 0) + 1)
       }
     }
@@ -1305,8 +1426,13 @@ export default function App() {
   }, [overviewList, now])
   const hourAlerts = useMemo(() => [...alertsByCam.values()].reduce((a, b) => a + b, 0), [alertsByCam])
 
-  const headline =
-    compliance === undefined
+  const headline = isMedicalView
+    ? medicalNegatives === undefined
+      ? "شغّل كاميرا لبدء الرصد الطبي"
+      : medicalNegatives === 0
+        ? "لا توجد مخالفات ظاهرة في الكادر"
+        : "توجد مخالفات معدات طبية في الكادر"
+    : compliance === undefined
       ? "شغّل كاميرا لبدء قياس الالتزام"
       : compliance >= 90
         ? "الموقع ملتزم بمعدات الوقاية"
@@ -1322,7 +1448,7 @@ export default function App() {
       <aside
         id="app-sidebar"
         aria-label="التنقل الرئيسي"
-        {...(sidebarHidden ? ({ inert: "" } as object) : {})}
+        {...(sidebarHidden ? ({ inert: true } as any) : {})}
         className={`fixed right-0 top-0 z-50 flex h-dvh w-[280px] shrink-0 flex-col border-l border-sidebar-border bg-sidebar transition-transform duration-300 lg:sticky ${
           sidebarHidden ? "translate-x-full" : "translate-x-0 shadow-2xl lg:shadow-none"
         }`}
@@ -1405,14 +1531,21 @@ export default function App() {
           <div className="flex items-center gap-3 rounded-xl bg-muted/60 p-2.5 ring-1 ring-border">
             <div className="relative shrink-0" aria-hidden="true">
               <div className="flex size-10 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
-                {CURRENT_USER.name.charAt(0)}
+                {displayName.charAt(0)}
               </div>
               <span className="absolute -bottom-0.5 -end-0.5 size-3 rounded-full bg-success ring-2 ring-card" />
             </div>
-            <div className="min-w-0 leading-tight">
-              <div className="truncate text-sm font-semibold">{CURRENT_USER.name}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">{CURRENT_USER.role}</div>
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="truncate text-sm font-semibold">{displayName}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{displayRole}</div>
             </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-bold text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              خروج
+            </button>
           </div>
         </div>
       </aside>
@@ -1537,7 +1670,7 @@ export default function App() {
             </div>
 
             <div className="flex size-9 items-center justify-center rounded-full bg-primary-light text-xs font-bold text-primary" aria-hidden="true">
-              {CURRENT_USER.name.charAt(0)}
+              {displayName.charAt(0)}
             </div>
           </div>
         </header>
@@ -1553,20 +1686,34 @@ export default function App() {
 
               <div className="stagger grid grid-cols-1 gap-6 lg:grid-cols-12 lg:gap-8">
                 <div className="lg:col-span-4">
-                  <ComplianceRing
-                    value={compliance}
-                    live={liveStatus === "open"}
-                    hint={selectedCamera?.is_running ? `لحظيًا من «${selectedCamera.name}»` : "شغّل كاميرا لعرض النسبة اللحظية"}
-                  />
+                  {isMedicalView ? (
+                    <MedicalStatusCard
+                      count={medicalNegatives}
+                      live={liveStatus === "open"}
+                      hint={selectedCamera?.is_running ? `لحظيًا من «${selectedCamera.name}»` : "شغّل كاميرا لعرض الحالة اللحظية"}
+                    />
+                  ) : (
+                    <ComplianceRing
+                      value={compliance}
+                      live={liveStatus === "open"}
+                      hint={selectedCamera?.is_running ? `لحظيًا من «${selectedCamera.name}»` : "شغّل كاميرا لعرض النسبة اللحظية"}
+                    />
+                  )}
                 </div>
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:col-span-8 lg:gap-8">
                   <StatCard
-                    label="عمال تحت المراقبة الآن"
-                    value={liveWorkers}
-                    icon={<Users className="size-5 stroke-[2.5]" />}
-                    tone="info"
+                    label={isMedicalView ? "مخالفات ظاهرة في الكادر" : "عمال تحت المراقبة الآن"}
+                    value={isMedicalView ? medicalNegatives : liveWorkers}
+                    icon={isMedicalView ? <ShieldAlert className="size-5 stroke-[2.5]" /> : <Users className="size-5 stroke-[2.5]" />}
+                    tone={isMedicalView ? "destructive" : "info"}
                     live={liveStatus === "open"}
-                    hint={selectedCamera?.is_running ? `${counts.hardhat_count ?? 0} خوذة · ${counts.vest_count ?? 0} سترة` : "لا يوجد بث نشط"}
+                    hint={
+                      selectedCamera?.is_running
+                        ? isMedicalView
+                          ? `${counts.no_mask ?? 0} كمامة · ${counts.no_gloves ?? 0} قفازات · ${counts.no_cap ?? 0} غطاء رأس`
+                          : `${counts.hardhat ?? 0} خوذة · ${counts.vest ?? 0} سترة`
+                        : "لا يوجد بث نشط"
+                    }
                   />
                   <StatCard
                     label={`مخالفات ${rangeLabel}`}
@@ -1731,45 +1878,48 @@ export default function App() {
                       desc={`لم يرصد النظام أي مخالفات في ${rangeLabel}.`}
                     />
                   ) : (
-                    overviewList.slice(0, 6).map((v) => (
-                      <button
-                        key={v.id}
-                        type="button"
-                        onClick={() => openFrame(v.frame_url)}
-                        disabled={!v.frame_url}
-                        className="group flex w-full items-center gap-4 p-4 text-start transition-colors hover:bg-muted/25 disabled:cursor-default disabled:hover:bg-transparent"
-                      >
-                        {v.frame_url ? (
-                          <img
-                            src={v.frame_url}
-                            loading="lazy"
-                            alt={`لقطة ${violationLabel(v.violation_type, ppeLabels)}`}
-                            className="size-14 shrink-0 rounded-xl border border-border/50 object-cover shadow-md transition-transform duration-300 group-hover:scale-105"
-                          />
-                        ) : (
-                          <div className="flex size-14 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-secondary text-muted-foreground">
-                            <ImageIcon className="size-5 opacity-50" />
+                    overviewList.slice(0, 6).map((v) => {
+                      const thumb = resolveFrameUrl(v.frame_url)
+                      return (
+                        <button
+                          key={v.id}
+                          type="button"
+                          onClick={() => openFrame(v.frame_url)}
+                          disabled={!thumb}
+                          className="group flex w-full items-center gap-4 p-4 text-start transition-colors hover:bg-muted/25 disabled:cursor-default disabled:hover:bg-transparent"
+                        >
+                          {thumb ? (
+                            <img
+                              src={thumb}
+                              loading="lazy"
+                              alt={`لقطة ${violationLabel(v.violation_type, ppeLabels)}`}
+                              className="size-14 shrink-0 rounded-xl border border-border/50 object-cover shadow-md transition-transform duration-300 group-hover:scale-105"
+                            />
+                          ) : (
+                            <div className="flex size-14 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-secondary text-muted-foreground">
+                              <ImageIcon className="size-5 opacity-50" />
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1 space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant={isCoreType(v.violation_type) ? "destructive" : "secondary"} className="rounded-md px-2 py-0.5 text-[11px] font-bold">
+                                {violationLabel(v.violation_type, ppeLabels)}
+                              </Badge>
+                              <span className="text-[11px] text-muted-foreground">{formatRelative(v.timestamp, now)}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="truncate font-medium text-foreground/85">{cameraName(v.camera_id)}</span>
+                              <span className="text-[11px] text-muted-foreground">
+                                ثقة الكشف <strong className="tabular-nums text-foreground">{Math.round(v.confidence * 100)}%</strong>
+                              </span>
+                            </div>
                           </div>
-                        )}
-                        <div className="min-w-0 flex-1 space-y-1.5">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant={isCoreType(v.violation_type) ? "destructive" : "secondary"} className="rounded-md px-2 py-0.5 text-[11px] font-bold">
-                              {violationLabel(v.violation_type, ppeLabels)}
-                            </Badge>
-                            <span className="text-[11px] text-muted-foreground">{formatRelative(v.timestamp, now)}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="truncate font-medium text-foreground/85">{cameraName(v.camera_id)}</span>
-                            <span className="text-[11px] text-muted-foreground">
-                              ثقة الكشف <strong className="tabular-nums text-foreground">{Math.round(v.confidence * 100)}%</strong>
-                            </span>
-                          </div>
-                        </div>
-                        {v.frame_url && (
-                          <ArrowLeft className="size-4 text-muted-foreground/25 transition-all duration-300 group-hover:-translate-x-1 group-hover:text-primary" />
-                        )}
-                      </button>
-                    ))
+                          {thumb && (
+                            <ArrowLeft className="size-4 text-muted-foreground/25 transition-all duration-300 group-hover:-translate-x-1 group-hover:text-primary" />
+                          )}
+                        </button>
+                      )
+                    })
                   )}
                 </div>
               </Card>
@@ -1779,7 +1929,6 @@ export default function App() {
           {/* ===================== LIVE ===================== */}
           {tab === "live" && (
             <div className="mx-auto grid max-w-7xl grid-cols-1 gap-6 lg:h-[calc(100dvh-8rem)] lg:grid-cols-12">
-              {/* قائمة الكاميرات + الأرقام اللحظية */}
               <div className="flex flex-col gap-4 lg:col-span-3 lg:h-full lg:min-h-0">
                 <Card className="flex max-h-[45vh] flex-1 flex-col overflow-hidden p-4 lg:max-h-none">
                   <div className="relative mb-4">
@@ -1848,7 +1997,9 @@ export default function App() {
                               </div>
                               <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
                                 <span className="rounded border border-border/40 bg-card px-1.5 py-0.5 tabular-nums">#{c.id}</span>
-                                <span className="truncate">{c.source_type}</span>
+                                <span className="truncate">
+                                  {PROFILE_LABEL[cameraProfile(c)]} · {c.source_type}
+                                </span>
                               </div>
                               {classes.length > 0 && (
                                 <div className="mt-2.5 flex flex-wrap gap-1">
@@ -1873,28 +2024,37 @@ export default function App() {
 
                 {selectedCamera && (
                   <div className="grid grid-cols-2 gap-3">
-                    <Card featured className="col-span-2 p-4 text-center">
-                      <div className={`text-3xl font-bold tabular-nums ${compliance === undefined ? "text-muted-foreground" : "text-gradient"}`}>
-                        {compliance === undefined ? "—" : `${compliance}%`}
-                      </div>
-                      <div className="mt-1 text-[11px] font-bold text-muted-foreground">نسبة الالتزام بالخوذة</div>
-                      {!selectedCamera.is_running && <div className="mt-1 text-[11px] text-muted-foreground">شغّل الكاميرا لعرض البيانات</div>}
-                      {selectedCamera.is_running && compliance === undefined && liveStatus === "open" && <div className="mt-1 text-[11px] text-muted-foreground">لا يوجد أشخاص في الكادر الآن</div>}
-                    </Card>
-                    <SideMetric icon={<Users className="size-4 text-info" />} value={selectedCamera.is_running ? counts.person_count : undefined} label="أشخاص" />
-                    <SideMetric icon={<HardHat className="size-4 text-warning" />} value={selectedCamera.is_running ? counts.hardhat_count : undefined} label="خوذات" />
-                    <SideMetric icon={<Shirt className="size-4 text-highlight" />} value={selectedCamera.is_running ? counts.vest_count : undefined} label="سترات" />
-                    <SideMetric icon={<Boxes className="size-4 text-primary" />} value={selectedCamera.is_running ? counts.total_detections : undefined} label="إجمالي الكشف" />
+                    {!isMedicalView && (
+                      <Card featured className="col-span-2 p-4 text-center">
+                        <div className={`text-3xl font-bold tabular-nums ${compliance === undefined ? "text-muted-foreground" : "text-gradient"}`}>
+                          {compliance === undefined ? "—" : `${compliance}%`}
+                        </div>
+                        <div className="mt-1 text-[11px] font-bold text-muted-foreground">نسبة الالتزام بالخوذة</div>
+                        {!selectedCamera.is_running && <div className="mt-1 text-[11px] text-muted-foreground">شغّل الكاميرا لعرض البيانات</div>}
+                        {selectedCamera.is_running && compliance === undefined && liveStatus === "open" && (
+                          <div className="mt-1 text-[11px] text-muted-foreground">لا يوجد أشخاص في الكادر الآن</div>
+                        )}
+                      </Card>
+                    )}
+                    {overlayMetrics.map((m) => (
+                      <SideMetric key={m.label} icon={sideMetricIcon(m.label)} value={m.value} label={m.label} />
+                    ))}
+                    {!isMedicalView && (
+                      <SideMetric
+                        icon={<Boxes className="size-4 text-primary" />}
+                        value={selectedCamera.is_running ? counts.total : undefined}
+                        label="إجمالي الكشف"
+                      />
+                    )}
                   </div>
                 )}
               </div>
 
-              {/* مسرح البث */}
               <div className="min-h-[360px] lg:col-span-9 lg:h-full lg:min-h-0">
                 <Card className="relative aspect-video h-full overflow-hidden bg-black p-0 shadow-2xl shadow-black/30 lg:aspect-auto">
                   <LiveStage
                     camera={selectedCamera}
-                    counts={counts}
+                    metrics={overlayMetrics}
                     status={liveStatus}
                     compliance={compliance}
                     pending={camPending}
@@ -1914,7 +2074,9 @@ export default function App() {
                 <div>
                   <h2 className="text-2xl font-bold text-foreground">إدارة مصادر الفيديو</h2>
                   <p className="mt-1.5 text-sm text-muted-foreground">اربط كاميرات RTSP وتحكم في تشغيلها وإيقافها من مكان واحد.</p>
-                  {runningCount > MAX_GRID_PREVIEWS && <p className="mt-2 text-[11px] text-muted-foreground">تُعرض معاينة حية لأول {MAX_GRID_PREVIEWS} كاميرات فقط للحفاظ على الأداء.</p>}
+                  {runningCount > MAX_GRID_PREVIEWS && (
+                    <p className="mt-2 text-[11px] text-muted-foreground">تُعرض معاينة حية لأول {MAX_GRID_PREVIEWS} كاميرات فقط للحفاظ على الأداء.</p>
+                  )}
                 </div>
 
                 <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -2035,10 +2197,16 @@ export default function App() {
 
                   <SegToggle checked={showAllTypes} onChange={setShowAllTypes} labelOn="كل الأنواع" labelOff="معدات الوقاية" />
 
-                  <Button asChild variant="outline" size="sm" className="gap-1.5 rounded-xl">
-                    <a href={exportUrl} target="_blank" rel="noopener noreferrer">
-                      <Download size={14} /> تصدير CSV
-                    </a>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 rounded-xl"
+                    disabled={exporting}
+                    onClick={onExport}
+                  >
+                    {exporting ? <Loader2 className="size-3.5 animate-spin" /> : <Download size={14} />}
+                    تصدير CSV
                   </Button>
                 </div>
               </div>
@@ -2103,6 +2271,7 @@ export default function App() {
                         const conf = Math.min(100, Math.max(0, Math.round(v.confidence * 100)))
                         const barColor = conf >= 85 ? "bg-success" : conf >= 60 ? "bg-warning" : "bg-destructive"
                         const resolvePending = resolvingViolationId === v.id
+                        const thumb = resolveFrameUrl(v.frame_url)
 
                         return (
                           <tr key={v.id} className="group transition-colors hover:bg-muted/60">
@@ -2110,13 +2279,13 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => openFrame(v.frame_url)}
-                                disabled={!v.frame_url}
-                                aria-label={v.frame_url ? "عرض اللقطة" : "لا توجد لقطة"}
+                                disabled={!thumb}
+                                aria-label={thumb ? "عرض اللقطة" : "لا توجد لقطة"}
                                 className="block overflow-hidden rounded-xl border border-border/50 transition-all hover:border-primary/40 hover:shadow-md hover:shadow-primary/10 disabled:cursor-default disabled:hover:border-border/50 disabled:hover:shadow-none"
                               >
-                                {v.frame_url ? (
+                                {thumb ? (
                                   <img
-                                    src={v.frame_url}
+                                    src={thumb}
                                     loading="lazy"
                                     alt=""
                                     className="h-10 w-14 object-cover transition-transform duration-300 group-hover:scale-110"
@@ -2165,7 +2334,7 @@ export default function App() {
                                   type="button"
                                   variant="ghost"
                                   size="sm"
-                                  disabled={!v.frame_url}
+                                  disabled={!thumb}
                                   onClick={() => openFrame(v.frame_url)}
                                   className="h-8 gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-primary-light hover:text-primary"
                                 >
@@ -2218,7 +2387,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* ─── Edit Camera Modal ─── */}
       <Dialog
         open={editOpen}
         onOpenChange={(open) => {
@@ -2248,7 +2416,6 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* ─── Delete Confirm ─── */}
       <ConfirmDialog
         open={deleteOpen}
         title="تأكيد حذف الكاميرا"
@@ -2265,7 +2432,6 @@ export default function App() {
         onConfirm={confirmDelete}
       />
 
-      {/* ─── Frame Modal ─── */}
       <Dialog open={frameUrl !== null} onOpenChange={(open) => { if (!open) setFrameUrl(null) }}>
         <DialogContent className="max-w-5xl overflow-hidden rounded-2xl border-border bg-background p-0 shadow-2xl">
           <DialogHeader className="border-b border-border bg-card/90 p-4 text-start">
@@ -2289,9 +2455,6 @@ export default function App() {
   )
 }
 
-/* ─── مكوّن مساعد (function declaration مرفوعة تلقائيًا، فاستخدامها قبل التعريف سليم) ─── */
-
-/** خانة رقم لحظي في اللوحة الجانبية بعدّاد متحرك، و"—" لما مفيش بث */
 function SideMetric({ icon, value, label }: { icon: ReactNode; value: number | undefined; label: string }) {
   const animated = useCountUp(value)
   return (

@@ -4,53 +4,96 @@ import type {
   CameraCreatePayload,
   CameraUpdatePayload,
   HealthResponse,
+  PPEClassesResponse,
   PPEClassInfo,
   Violation,
   ViolationListResponse,
+  LoginResponse,
+  MeResponse,
 } from "@/types"
 
-export type PPEClassesResponse = {
-  items: PPEClassInfo[]
-  default_enabled: string[]
-  allowed: string[]
-}
-
-// ✅ مفتاح الـ API بيتحط وقت الـ build من متغير بيئة (frontend/.env ->
-// VITE_API_KEY) ولازم يطابق API_KEY في إعدادات الباك إند، وإلا كل
-// عمليات الكتابة (إضافة/تعديل/حذف/تشغيل/إيقاف كاميرا، تأكيد مخالفة)
-// هترجع 401 Unauthorized.
-// ⚠️ القيمة دي بتبقى ظاهرة في الـ JS bundle النهائي (أي حد يفتح
-// DevTools هيشوفها)، فده مناسب بس لأداة داخلية على شبكة مقفولة،
-// مش لتطبيق متاح للعامة على الإنترنت بدون نظام مستخدمين حقيقي.
-const API_KEY: string = import.meta.env.VITE_API_KEY ?? ""
+const TOKEN_KEY = "nexora-token"
+const MEDIA_ORIGIN = String(import.meta.env.VITE_API_ORIGIN ?? "").replace(/\/$/, "")
 
 export const api = axios.create({
   baseURL: "/api/v1",
-  headers: {
-    "Content-Type": "application/json",
-    ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
-  },
+  headers: { "Content-Type": "application/json" },
   timeout: 30000,
 })
 
-// ── Health ───────────────────────────────────────────────────────
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || ""
+}
+
+export function setToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
+export function logout() {
+  clearToken()
+  try {
+    localStorage.removeItem("nexora-user")
+  } catch {
+    /* ignore */
+  }
+  window.location.assign("/")
+}
+
+api.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) {
+    config.headers = config.headers ?? {}
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  (r) => r,
+  (error) => {
+    if (error?.response?.status === 401) {
+      const url = String(error?.config?.url ?? "")
+      if (!url.includes("/auth/login")) clearToken()
+    }
+    return Promise.reject(error)
+  },
+)
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const body = new URLSearchParams({ username, password })
+  const { data } = await axios.post<LoginResponse>("/api/v1/auth/login", body, {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeout: 30000,
+  })
+  return data
+}
+
+export async function me(): Promise<MeResponse> {
+  const { data } = await api.get<MeResponse>("/auth/me")
+  return data
+}
+
 export async function getHealth(): Promise<HealthResponse> {
   const { data } = await api.get<HealthResponse>("/health")
   return data
 }
 
-// ── PPE Classes (Meta) ───────────────────────────────────────────
-export async function getPPEClassesMeta(): Promise<PPEClassesResponse> {
-  const { data } = await api.get<PPEClassesResponse>("/meta/ppe-classes")
+export async function getPPEClassesMeta(profile?: "construction" | "medical"): Promise<PPEClassesResponse> {
+  const { data } = await api.get<PPEClassesResponse>("/meta/ppe-classes", {
+    params: profile ? { profile } : undefined,
+  })
   return data
 }
 
-export async function getPPEClasses(): Promise<PPEClassInfo[]> {
-  const meta = await getPPEClassesMeta()
+export async function getPPEClasses(profile?: "construction" | "medical"): Promise<PPEClassInfo[]> {
+  const meta = await getPPEClassesMeta(profile)
   return meta.items
 }
 
-// ── Cameras ──────────────────────────────────────────────────────
 export async function getCameras(): Promise<Camera[]> {
   const { data } = await api.get<Camera[]>("/cameras")
   return data
@@ -83,37 +126,62 @@ export async function stopCamera(id: number): Promise<void> {
   await api.post(`/cameras/${id}/stop`)
 }
 
-// ── Violations ───────────────────────────────────────────────────
 export async function getViolations(params?: {
   camera_id?: number
   violation_type?: string
   page?: number
   page_size?: number
-  from?: string // ✅ ISO string
-  to?: string   // ✅ ISO string
+  from?: string
+  to?: string
 }): Promise<ViolationListResponse> {
   const { data } = await api.get<ViolationListResponse>("/violations", { params })
   return data
 }
 
-// ✅ جديد: يأشّر على المخالفة كـ "تمت معالجتها" (resolved_at في الباك إند)
 export async function resolveViolation(id: number): Promise<Violation> {
   const { data } = await api.post<Violation>(`/violations/${id}/resolve`)
   return data
 }
 
-export function getViolationsExportUrl(cameraId?: number): string {
-  const url = new URL("/api/v1/violations/export", window.location.origin)
-  if (cameraId) url.searchParams.set("camera_id", String(cameraId))
-  return url.toString()
+/** تحميل CSV بنفس التوكن (الـ endpoint محمي بـ Bearer مش query) */
+export async function downloadViolationsCsv(params?: {
+  camera_id?: number
+  violation_type?: string
+  from?: string
+  to?: string
+}): Promise<void> {
+  const { data } = await api.get<Blob>("/violations/export", {
+    params,
+    responseType: "blob",
+  })
+  const blob = new Blob([data], { type: "text/csv;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = "violations.csv"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
-// ── Streaming helpers ────────────────────────────────────────────
+/** الباك بيرجع /frames/{frame_path} خارج /api/v1 */
+export function resolveFrameUrl(frameUrl?: string | null): string | null {
+  if (!frameUrl) return null
+  if (/^https?:\/\//i.test(frameUrl)) return frameUrl
+  const path = frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`
+  return MEDIA_ORIGIN ? `${MEDIA_ORIGIN}${path}` : path
+}
+
 export function getMjpegStreamUrl(cameraId: number): string {
-  return `/api/v1/stream/${cameraId}`
+  const token = getToken()
+  const u = new URL(`/api/v1/stream/${cameraId}`, window.location.origin)
+  if (token) u.searchParams.set("token", token)
+  return `${u.pathname}${u.search}`
 }
 
 export function getWebSocketUrl(cameraId: number): string {
+  const token = getToken()
   const proto = window.location.protocol === "https:" ? "wss" : "ws"
-  return `${proto}://${window.location.host}/api/v1/ws/${cameraId}`
+  return `${proto}://${window.location.host}/api/v1/ws/${cameraId}?token=${encodeURIComponent(token)}`
 }

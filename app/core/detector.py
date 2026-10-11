@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
+
 from app.core.logging import get_logger
 from app.core.config import settings
 
 logger = get_logger(__name__)
 
+# ألوان (نغطي construction + medical names)
 CLASS_COLORS_BY_NAME = {
+    # Construction
     "Hardhat": (255, 0, 0),
     "NO-Hardhat": (0, 0, 255),
     "Safety Vest": (0, 255, 255),
@@ -15,13 +18,25 @@ CLASS_COLORS_BY_NAME = {
     "Mask": (0, 255, 0),
     "NO-Mask": (255, 255, 0),
     "Person": (200, 200, 200),
-
     "Gloves": (255, 165, 0),
     "NO-Gloves": (255, 80, 0),
     "Safety Boots": (100, 200, 255),
     "NO-Safety Boots": (80, 120, 255),
     "Goggles": (180, 255, 180),
     "NO-Goggles": (120, 220, 120),
+
+    # Medical (lowercase)
+    "mask": (0, 255, 0),
+    "no mask": (0, 0, 255),
+    "hand gloves": (255, 165, 0),
+    "no hand gloves": (0, 0, 255),
+    "head cap": (0, 255, 255),
+    "no head cap": (0, 0, 255),
+    "goggle": (180, 255, 180),
+    "no goggle": (120, 220, 120),
+    "lab coat": (255, 0, 255),
+    "full cover": (255, 255, 255),
+    "shoe cover": (100, 200, 255),
 }
 
 
@@ -38,17 +53,20 @@ class Detection:
 
 
 class PPEDetector:
-    def __init__(self, model_path: str, confidence: float = 0.5) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        confidence: float,
+        default_class_conf: float,
+        class_conf_thresholds: str = "",
+    ) -> None:
         from ultralytics import YOLO
 
         self.model = YOLO(model_path)
-
-        # global threshold used by YOLO inference
         self.confidence = confidence
 
-        # per-class thresholds
-        self.default_class_conf = settings.DEFAULT_CLASS_CONF
-        self.class_conf = settings.parse_class_thresholds()
+        self.default_class_conf = default_class_conf
+        self.class_conf = settings.parse_class_thresholds_str(class_conf_thresholds)
 
         logger.info("PPEDetector loaded: %s (global_conf=%.2f)", model_path, confidence)
         logger.info("Default class conf: %.2f", self.default_class_conf)
@@ -60,9 +78,7 @@ class PPEDetector:
         return self.model.names
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        # YOLO inference with a low global conf, then we filter per class below
         results = self.model(frame, conf=self.confidence, verbose=False)
-
         detections: list[Detection] = []
 
         for result in results:
@@ -73,7 +89,6 @@ class PPEDetector:
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
 
-                # apply per-class threshold
                 thr = self.class_conf.get(cls_id, self.default_class_conf)
                 if conf < thr:
                     continue

@@ -4,33 +4,28 @@ from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
+from pydantic_core.core_schema import ValidationInfo
 
-from app.core.ppe import ALLOWED_PPE_KEYS, DEFAULT_ENABLED_CLASSES
+from app.core.ppe import sanitize_enabled_classes, Profile
 
-
-def _validate_enabled(v):
-    if v is None:
-        return None
-    if not v:
-        return DEFAULT_ENABLED_CLASSES.copy()
-    if not isinstance(v, list):
-        raise ValueError("enabled_classes must be a list")
-    invalid = [x for x in v if x not in ALLOWED_PPE_KEYS]
-    if invalid:
-        raise ValueError(f"Invalid enabled_classes: {invalid}. Allowed: {ALLOWED_PPE_KEYS}")
-    return v
+CameraProfile = Literal["construction", "medical"]
 
 
 class CameraCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     source_type: Literal["webcam", "rtsp", "file"]
     source_uri: str = Field(..., min_length=1, max_length=500)
-    enabled_classes: list[str] = Field(default_factory=lambda: DEFAULT_ENABLED_CLASSES.copy())
+
+    # optional: لو user.sector != both هنفرضها من السيرفر
+    profile: Optional[CameraProfile] = None
+
+    enabled_classes: Optional[list[str]] = None
 
     @field_validator("enabled_classes", mode="before")
     @classmethod
-    def validate_enabled(cls, v):
-        return _validate_enabled(v) or DEFAULT_ENABLED_CLASSES.copy()
+    def validate_enabled(cls, v, info: ValidationInfo):
+        profile = info.data.get("profile") or "construction"
+        return sanitize_enabled_classes(profile, v)
 
 
 class CameraUpdate(BaseModel):
@@ -40,8 +35,9 @@ class CameraUpdate(BaseModel):
 
     @field_validator("enabled_classes", mode="before")
     @classmethod
-    def validate_enabled(cls, v):
-        return _validate_enabled(v)
+    def validate_enabled(cls, v, info: ValidationInfo):
+        # في update مش عندنا profile في الـ payload، السيرفر هيستخدم profile من DB
+        return v
 
 
 class CameraResponse(BaseModel):
@@ -49,6 +45,7 @@ class CameraResponse(BaseModel):
     name: str
     source_type: str
     source_uri: str
+    profile: str
     enabled_classes: list[str]
     is_active: bool
     created_at: datetime

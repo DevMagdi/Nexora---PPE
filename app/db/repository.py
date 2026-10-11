@@ -2,22 +2,16 @@ from __future__ import annotations
 
 from typing import Optional
 
+from sqlalchemy import select
+
 from app.core.logging import get_logger
 from app.core.violation_checker import ViolationEvent
+from app.core.auth import hash_password
 
 logger = get_logger(__name__)
 
 
 async def save_violation(violation: ViolationEvent) -> Optional[int]:
-    """
-    يحفظ المخالفة في قاعدة البيانات ويرجع الـ id بتاعها، أو None لو فشل.
-
-    ✅ ده الخطوة الأولى اللي بتحصل *قبل* إرسال أي تنبيه (إيميل/ويبهوك)،
-    عشان نقدر نربط كل محاولة إرسال بـ violation_id حقيقي في جدول alert_log
-    (قبل كده كان DatabaseHandler بيتسابق مع باقي الـ handlers في
-    asyncio.gather، فمفيش ضمان إن الـ violation كانت اتسجلت في الداتابيز
-    قبل ما باقي الـ handlers تحاول تربط نفسها بيها).
-    """
     try:
         from app.db.models import Violation
         from app.db.session import AsyncSessionLocal
@@ -32,13 +26,6 @@ async def save_violation(violation: ViolationEvent) -> Optional[int]:
             session.add(db_violation)
             await session.commit()
             await session.refresh(db_violation)
-
-            logger.info(
-                "Violation saved to DB: id=%s camera=%d type=%s",
-                db_violation.id,
-                violation.camera_id,
-                violation.violation_type,
-            )
             return db_violation.id
     except Exception as exc:
         logger.error("Failed to save violation to DB: %s", exc)
@@ -51,12 +38,6 @@ async def record_alert_log(
     success: bool,
     error_msg: Optional[str] = None,
 ) -> None:
-    """
-    يسجّل محاولة إرسال تنبيه (ناجحة أو فاشلة) في جدول alert_log.
-
-    ⚠️ أي خطأ هنا بيتسجل في اللوج بس *مش* بيتعمله raise — لأن فشل تسجيل
-    اللوج مينفعش يوقف أو يأثر على نتيجة إرسال التنبيه نفسه.
-    """
     try:
         from app.db.models import AlertLog
         from app.db.session import AsyncSessionLocal
@@ -72,3 +53,39 @@ async def record_alert_log(
             await session.commit()
     except Exception as exc:
         logger.error("Failed to record alert log (%s): %s", handler_type, exc)
+
+
+# ------------------------
+# Users
+# ------------------------
+async def get_user_by_username(username: str):
+    from app.db.models import User
+    from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        q = select(User).where(User.username == username)
+        res = await session.execute(q)
+        return res.scalar_one_or_none()
+
+
+async def ensure_bootstrap_user(username: str, password: str, sector: str) -> None:
+    """
+    ينشئ user واحد عند أول تشغيل لو جدول users فاضي.
+    """
+    from app.db.models import User
+    from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(select(User).limit(1))
+        any_user = res.scalar_one_or_none()
+        if any_user:
+            return
+
+        u = User(
+            username=username,
+            password_hash=hash_password(password),
+            sector=sector,
+        )
+        session.add(u)
+        await session.commit()
+        logger.warning("Bootstrap user created: username=%s sector=%s (CHANGE PASSWORD!)", username, sector)

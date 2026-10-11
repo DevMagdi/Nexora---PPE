@@ -37,10 +37,8 @@ def draw_text_with_background(
 def annotate_frame(
     frame: np.ndarray,
     detections: list[Detection],
-    hardhat_count: int,
-    vest_count: int,
-    person_count: int,
-    show_email_sent: bool = False,
+    stats_lines: list[str],
+    show_alert_sent: bool = False,
 ) -> np.ndarray:
     annotated = frame.copy()
 
@@ -58,15 +56,11 @@ def annotate_frame(
             padding=4,
         )
 
-    for i, text in enumerate([
-        f"Hardhats: {hardhat_count}",
-        f"Safety Vests: {vest_count}",
-        f"People: {person_count}",
-    ]):
+    for i, text in enumerate(stats_lines[:6]):  # max 6 lines
         draw_text_with_background(
             annotated,
             text,
-            (10, 30 + i * 30),
+            (10, 30 + i * 28),
             font_scale=0.5,
             color=(255, 255, 255),
             bg_color=(0, 0, 0),
@@ -74,7 +68,7 @@ def annotate_frame(
             padding=5,
         )
 
-    if show_email_sent:
+    if show_alert_sent:
         draw_text_with_background(
             annotated,
             "Alert Sent",

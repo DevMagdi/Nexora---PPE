@@ -18,27 +18,35 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
-    # CORS — عدّلها في الإنتاج لتحدد origins بعينها بدل "*"
-    CORS_ORIGINS: list[str] = ["*"]
-
-    # Security
-    API_KEY: str = ""
+    # CORS
+    CORS_ORIGINS: str = "*"
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./ppe_detection.db"
 
-    # Model
-    MODEL_PATH: str = "Model/ppe.pt"
+    # JWT Auth
+    JWT_SECRET: str = "CHANGE_ME_SUPER_SECRET"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
-    # Global YOLO confidence passed to model(...) before per-class filtering
-    DETECTION_CONFIDENCE: float = 0.5
+    BOOTSTRAP_USERNAME: str = "admin"
+    BOOTSTRAP_PASSWORD: str = "admin123"
+    BOOTSTRAP_SECTOR: Literal["construction", "medical", "both"] = "construction"
 
-    # Per-class confidence thresholds (post-filtering)
-    # Example:
-    # DEFAULT_CLASS_CONF=0.25
-    # CLASS_CONF_THRESHOLDS="10:0.40,8:0.20"
-    DEFAULT_CLASS_CONF: float = 0.25
-    CLASS_CONF_THRESHOLDS: str = ""
+    # RTSP allowlist (SSRF protection)
+    ALLOWED_RTSP_PREFIXES: str = ""
+
+    # ===== Construction Model =====
+    CONSTRUCTION_MODEL_PATH: str = "Model/ppe_construction.pt"
+    CONSTRUCTION_DETECTION_CONFIDENCE: float = 0.10
+    CONSTRUCTION_DEFAULT_CLASS_CONF: float = 0.25
+    CONSTRUCTION_CLASS_CONF_THRESHOLDS: str = ""
+
+    # ===== Medical Model =====
+    MEDICAL_MODEL_PATH: str = "Model/ppe_medical.pt"
+    MEDICAL_DETECTION_CONFIDENCE: float = 0.15
+    MEDICAL_DEFAULT_CLASS_CONF: float = 0.30
+    MEDICAL_CLASS_CONF_THRESHOLDS: str = ""
 
     # Violation frames storage
     FRAMES_DIR: str = "violation_frames"
@@ -46,13 +54,15 @@ class Settings(BaseSettings):
     FRAME_CLEANUP_INTERVAL_HOURS: float = 6.0
 
     # Alert timing
-    ALERT_COOLDOWN_SECONDS: int = 10
-    VIOLATION_PERSIST_SECONDS: int = 10
-    ALERT_DISPLAY_SECONDS: float = 3.0  # مدة ظهور "Alert Sent" على الفريم
+    # Alert timing
+    ALERT_COOLDOWN_SECONDS: int = 60
+    VIOLATION_PERSIST_SECONDS: int = 8
+    MEDICAL_VIOLATION_PERSIST_SECONDS: int = 3
+    ALERT_DISPLAY_SECONDS: float = 3.0
 
     # Camera loop timing
     FRAME_READ_RETRY_DELAY_SECONDS: float = 0.05
-    STREAM_FPS_DELAY_SECONDS: float = 0.04  # ~25 fps لبث MJPEG
+    STREAM_FPS_DELAY_SECONDS: float = 0.04  # ~25 fps
 
     # Email
     SENDER_EMAIL: str = ""
@@ -67,24 +77,18 @@ class Settings(BaseSettings):
     WEBHOOK_URL: str = ""
     WEBHOOK_TIMEOUT_SECONDS: float = 10.0
 
-    # RTSP allowlist (SSRF protection)
-    ALLOWED_RTSP_PREFIXES: str = ""
-
-    def parse_class_thresholds(self) -> dict[int, float]:
+    @staticmethod
+    def parse_class_thresholds_str(s: str) -> dict[int, float]:
         """
-        Parses CLASS_CONF_THRESHOLDS string like:
-        "10:0.40,8:0.20" into {10: 0.40, 8: 0.20}
+        Parses "10:0.40,8:0.20" into {10:0.40, 8:0.20}
         """
         out: dict[int, float] = {}
-        s = (self.CLASS_CONF_THRESHOLDS or "").strip()
+        s = (s or "").strip()
         if not s:
             return out
-
         for part in s.split(","):
             part = part.strip()
-            if not part:
-                continue
-            if ":" not in part:
+            if not part or ":" not in part:
                 continue
             k, v = part.split(":", 1)
             try:
