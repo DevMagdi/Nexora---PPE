@@ -14,12 +14,17 @@ Nexora connects to existing cameras (**RTSP / IP cameras, Webcams, or Video File
   - **Construction Model (`Model/ppe.pt`):** Detects `Person`, `Hardhat` / `NO-Hardhat`, `Safety Vest` / `NO-Safety Vest`, `Mask` / `NO-Mask`, `Gloves` / `NO-Gloves`, `Safety Boots` / `NO-Safety Boots`, and `Goggles` / `NO-Goggles` with person-bounding-box IoU association.
   - **Medical Model (`Model/bestMedicalModel.pt`):** Detects `mask` / `no mask`, `hand gloves` / `no hand gloves`, `head cap` / `no head cap`, `goggle` / `no goggle`, `lab coat`, `full cover`, and `shoe cover` with grace-period debouncing.
   - **`HybridPPEDetector` (`app/core/hybrid_detector.py`):** Runs **both** YOLO models on the same frame, normalises every class name to one canonical vocabulary (`no goggle` ≡ `NO-Goggles`), merges duplicate boxes with **cross-model confidence fusion**, resolves positive/negative conflicts, and feeds a single detection list to the existing checkers. Medical cameras finally get a `Person` class (the medical model has none), so PPE items can be associated with staff and "staff present but lab coat missing" works out of the box.
+  - **Construction → Medical Bridge (`_bridge_construction_to_medical`):** When a medical camera borrows the construction model, only what the medical profile can use crosses over — `Person` plus the shared items (Mask / Goggles / Gloves). Construction-only classes (Hardhat, Safety Vest, Safety Boots) are dropped before they can pollute medical counters, and the crossing count is published as `bridged` in the hybrid stats.
+  - **Anatomical Eye Bridge (`_append_anatomical_eye_bridge`):** On medical cameras running *without* any `Person` box (e.g. `HYBRID_CONSTRUCTION_ON_MEDICAL=false`), every `Mask` detection is used as an anatomical anchor — the eye line sits directly above the mask, so the nose-bridge test still runs and can emit `NO-Goggles` (`skin:anatomical_bridge`).
+  - **Glove reject ratio (`SKIN_GLOVE_REJECT_RATIO`, default `0.24`):** A `Gloves` box whose region contains **≥ 24 %** thick exposed skin (distanceTransform) is a fake glove and is downgraded to `NO-Gloves` — stricter than the generic `SKIN_STRONG_RATIO` because a real glove never shows skin in its middle.
+  - **Safe Weight Migration (`RETIRED_MODEL_PATHS`):** Legacy weights (e.g. the removed `Model/bestMedicalModel2.pt`) can never be loaded again: any `.env` still pointing at them is redirected to the approved replacement automatically, retired paths are skipped in fallback lists, and `sanitize_class_conf_thresholds` drops per-class confidence thresholds whose class ids do not exist in the loaded model.
 - **Smart Skin Layer (`app/core/skin_analysis.py`):** Adds deterministic OpenCV evidence on top of the models:
   - **`calc_skin_ratio`** — dual-threshold (HSV + YCrCb) skin pixel ratio per region.
   - **Bare-hand detection with `distanceTransform`** — a real bare hand is a *thick* skin blob; gloved hands and stray skin (wrists/arms/background) are not. Confirms `NO-Gloves`, downgrades fake `Gloves`, and scans for bare hands when the models report no glove box at all.
   - **Eye-bridge `NO-Goggles`** — if the strip between the eye centres (the nose bridge) is skin/eye coloured, goggles are not worn → emits `NO-Goggles`. If instead a glass/opaque band covers the eye line, `Goggles` is confirmed. Works with `haarcascade_eye` when available and with the built-in contrast eye detector on OpenCV 5 (where `cv2.CascadeClassifier` was removed).
   - Every produced/fused detection is tagged (`model:medical+skin:eye_bridge`, …) and drawn with a `[skin]` marker in the live stream, and `skin_hits` is published in the WebSocket counts.
 - **Per-Camera Custom Monitoring Rules:** Configure which PPE items are required on each camera independently and update rules on the fly without restarting the stream.
+  - **Rule-Synced Display (`_filter_detections_for_display`):** The annotated stream draws exactly what the camera actually checks — `Person` (for context) plus the enabled classes only, including skin-generated detections. Disabled classes never appear on the video or the on-screen stat lines, even if a model detects them (WebSocket telemetry still carries the full picture).
 - **Role/Sector Access Control (JWT Auth):** Users can be scoped to `construction`, `medical`, or `both` (general administration), isolating cameras, streams, frames, and violation exports by sector.
 - **Live Streaming & Telemetry:**
   - Authenticated **MJPEG** video streaming (`/api/v1/stream/{camera_id}`) with frame-sequence deduplication.
@@ -44,6 +49,8 @@ Nexora---PPE/
 ├── frontend/              # React 19 + TypeScript + Vite + Tailwind CSS v4 dashboard
 ├── migrations/            # Alembic database migrations (SQLite, PostgreSQL, SQL Server)
 ├── Model/                 # Bundled YOLO weights (ppe.pt, bestMedicalModel.pt)
+│                          #   bestMedicalModel2.pt was RETIRED — stale .env entries are
+│                          #   auto-migrated to bestMedicalModel.pt (safe weight migration)
 ├── docker/                # Multi-stage production Dockerfile & development Dockerfile.dev
 ├── tests/                 # Unit and integration test suites (pytest + httpx AsyncClient)
 ├── docker-compose.yml     # Production stack (FastAPI + React SPA + PostgreSQL 16)
@@ -148,6 +155,7 @@ APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 | `SKIN_BARE_HAND_ENABLED` | `true` | Bare-hand detection via `distanceTransform` |
 | `SKIN_EYE_BRIDGE_ENABLED` | `true` | Eye-bridge `NO-Goggles` test |
 | `SKIN_MIN_RATIO` / `SKIN_STRONG_RATIO` | `0.18` / `0.32` | Skin ratio that counts as "exposed" / "strong enough to override a positive class" |
+| `SKIN_GLOVE_REJECT_RATIO` | `0.24` | Skin ratio inside a `Gloves` box that rejects it as a fake glove (→ `NO-Gloves`) |
 | `SKIN_BARE_HAND_MIN_THICKNESS` / `SKIN_BARE_HAND_MIN_AREA` | `0.12` / `0.10` | Minimum distanceTransform thickness and blob area for a bare hand |
 | `SKIN_EYE_BRIDGE_MIN_SKIN_RATIO` | `0.22` | Minimum skin ratio in the nose-bridge strip for `NO-Goggles` |
 | `SKIN_GLASS_CONFIRM_MIN_RATIO` | `0.05` | Glass-band height ratio that confirms `Goggles` |
@@ -168,13 +176,17 @@ APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 frame ─┬─► construction YOLO (ppe.pt)          ─┐
        └─► medical YOLO (bestMedicalModel.pt)  ─┤
                                                 ▼
-                            canonicalise names + merge (IoU) + confidence fusion
+                     canonicalise names + construction→medical bridge (medical cams)
+                                                ▼
+                            merge (IoU) + confidence fusion
                                                 ▼
                        resolve positive/negative conflicts (Mask vs NO-Mask …)
                                                 ▼
    smart skin layer:  calc_skin_ratio  |  distanceTransform (bare hand)  |  eye bridge (NO-Goggles)
+                      + anatomical eye bridge (mask anchor, no Person needed)
                                                 ▼
                        list[Detection] ──► ViolationCheckers ──► DB / Email / Slack / Webhook
+                                       └──► rule-synced display (enabled classes only on stream)
 ```
 
 **Why it matters**
@@ -184,8 +196,12 @@ frame ─┬─► construction YOLO (ppe.pt)          ─┐
 | Medical model has **no `Person`** class | Construction model supplies `Person`; PPE items are associated to the nearest person by IoU |
 | `no goggle` vs `NO-Goggles` naming clash | One canonical vocabulary (`app/core/ppe.py::canonical_class_name`) used by merging, checkers and counters |
 | Small PPE items missed at low confidence | Second model + skin evidence (`NO-Mask`, `NO-Gloves`, `NO-Goggles`) generated *after* the confidence filter |
-| "Gloves" predicted on a bare hand | `distanceTransform` thickness test downgrades fake `Gloves` to `NO-Gloves` |
+| "Gloves" predicted on a bare hand | `distanceTransform` thickness test + **24 % glove reject ratio** downgrade fake `Gloves` to `NO-Gloves` |
 | False `NO-Goggles` on someone wearing goggles | The glass-band check on the eye line confirms `Goggles` instead |
+| No `NO-Goggles` when the medical camera runs without `Person` | The **anatomical eye bridge** anchors the nose-bridge test on each detected `Mask` |
+| Construction-only boxes (helmet/vest/boots) on medical streams | The **construction→medical bridge** only passes `Person` + shared items across |
+| Old weights re-loaded by a stale `.env` | **Safe weight migration**: retired paths redirect to the approved replacement and stale class-id thresholds are dropped |
+| Stream shows boxes the camera does not check | **Rule-synced display** draws only enabled classes (+ `Person`) on the annotated video |
 
 **Tuning tips**
 
@@ -198,8 +214,30 @@ frame ─┬─► construction YOLO (ppe.pt)          ─┐
 
 ```bash
 # unit tests for the skin layer + hybrid detector (no GPU / torch weights needed)
-pytest tests/unit/test_skin_analysis.py tests/unit/test_hybrid_detector.py -v
+pytest tests/unit/test_skin_analysis.py tests/unit/test_hybrid_detector.py \
+       tests/unit/test_hybrid_bridge.py tests/unit/test_hybrid_anatomical.py \
+       tests/unit/test_glove_reject.py tests/unit/test_weight_migration.py \
+       tests/unit/test_display_filter.py -v
 ```
+
+---
+
+## ملخص التحديث بالعربية (Detection Update)
+
+- **ترحيل آمن للأوزان:** الوزن القديم `Model/bestMedicalModel2.pt` اتشال نهائيًا، وأي إعداد قديم
+  في `.env` يشير إليه بيتحوّل تلقائيًا إلى `Model/bestMedicalModel.pt`. كمان عتبات الثقة لكل فئة
+  (`*_CLASS_CONF_THRESHOLDS`) بتتنضّف من أي رقم فئة مش موجود في الموديل المحمّل، فمفيش عتبة قديمة
+  هتتلزق على فئة تانية بالغلط.
+- **الجسر الإنشائي (construction → medical):** كاميرات القطاع الطبي اللي بتستعين بالموديل الإنشائي
+  بياخدوا منه `Person` والقطع المشتركة بس (كمامة/نظارة/جوانتي) — الخوذة والفيست والبوت فئات إنشائية
+  خالصة وبتسقط قبل العدادات والعرض.
+- **الجسر التشريحي (anatomical eye bridge):** لو مفيش `Person` في الكادر (كاميرا طبية والمساعد
+  الإنشائي مقفول)، كل كشف كمامة بيستخدم كمرجع تشريحي — خط العينين فوق الكمامة مباشرة، ولو جسر
+  الأنف مكشوف بيتسجّل `NO-Goggles`.
+- **نسبة رفض القفاز 24%:** أي بوكس `Gloves` جواه ≥24% جلد مكشوف سميك بيتقلب `NO-Gloves`
+  (الإعداد: `SKIN_GLOVE_REJECT_RATIO`).
+- **مزامنة العرض مع القواعد:** بث الكاميرا بيرسم بس الفئات المفعّلة على الكاميرا (ومعاها `Person`
+  للسياق) — أي فئة مش مفعّلة متظهرش على الفيديو ولا في الأسطر الإحصائية.
 
 ---
 

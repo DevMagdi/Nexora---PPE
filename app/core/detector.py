@@ -76,19 +76,108 @@ class Detection:
     source: str = "model"
 
 
+# ---------------------------------------------------------------------------
+# Safe weight migration
+# ---------------------------------------------------------------------------
+# أوزان قديمة تم رفدها: ممنوع تحميلها تاني تحت أي ظرف (إعداد قديم في .env،
+# fallback منسّي، أو صورة Docker قديمة). أي مسار بيطابقها بيتحوّل تلقائيًا
+# للبديل المعتمد، فإعدادات المستخدمين القديمة تكمل شغل من غير تدخل يدوي.
+RETIRED_MODEL_PATHS: tuple[str, ...] = (
+    "Model/bestMedicalModel2.pt",
+)
+
+# خريطة الترحيل: وزن مرفود -> البديل المعتمد
+MODEL_MIGRATIONS: dict[str, str] = {
+    "Model/bestMedicalModel2.pt": "Model/bestMedicalModel.pt",
+}
+
+
+def _normalize_model_path(path: str | None) -> str:
+    """مفتاح مقارنة موحّد لمسار الموديل (بدون اختلافات \\ أو ./ أو //)."""
+    return os.path.normpath((path or "").strip().replace("\\", "/"))
+
+
+def is_retired_model_path(path: str | None) -> bool:
+    """
+    هل المسار ده وزن مرفود؟
+
+    المطابقة بالاسم الأساسي (basename) كمان، لأن الوزن نفسه هو المرفود —
+    مش مكانه على الـ Disk — فأي نسخة منه في أي فولدر مرفوضة.
+    """
+    if not path:
+        return False
+    normalized = _normalize_model_path(path)
+    retired_normalized = {_normalize_model_path(p) for p in RETIRED_MODEL_PATHS}
+    retired_basenames = {
+        os.path.basename(_normalize_model_path(p)) for p in RETIRED_MODEL_PATHS
+    }
+    return normalized in retired_normalized or os.path.basename(normalized) in retired_basenames
+
+
+def migrate_model_path(path: str) -> str:
+    """يرحّل أي وزن مرفود لبديله المعتمد (مع تحذير في اللوج)، وغير كده يرجع المسار زي ما هو."""
+    if not is_retired_model_path(path):
+        return path
+    for retired, replacement in MODEL_MIGRATIONS.items():
+        if _normalize_model_path(retired) == _normalize_model_path(path) or os.path.basename(
+            _normalize_model_path(retired)
+        ) == os.path.basename(_normalize_model_path(path)):
+            logger.warning(
+                "Model weight '%s' is retired; migrating to '%s'",
+                path,
+                replacement,
+            )
+            return replacement
+    return path
+
+
 def resolve_model_path(model_path: str, fallbacks: tuple[str, ...] = ()) -> str:
-    """Resolves model path on disk, falling back to known bundled weights if needed."""
-    if os.path.exists(model_path):
-        return model_path
+    """
+    يحسم مسار الموديل على الـ Disk مع ترحيل آمن للأوزان المرفودة.
+
+    * مسار مضبوط على وزن مرفود → يتحوّل للبديل المعتمد.
+    * fallback مرفود → بيتخطّى دايمًا (ولو الملف موجود فعلًا).
+    """
+    migrated = migrate_model_path(model_path)
+    if os.path.exists(migrated):
+        return migrated
     for candidate in fallbacks:
-        if os.path.exists(candidate):
+        migrated_candidate = migrate_model_path(candidate)
+        if is_retired_model_path(migrated_candidate):
+            logger.warning("Skipping retired model weight in fallbacks: %s", candidate)
+            continue
+        if os.path.exists(migrated_candidate):
             logger.warning(
                 "Configured model '%s' not found; falling back to '%s'",
                 model_path,
-                candidate,
+                migrated_candidate,
             )
-            return candidate
-    return model_path
+            return migrated_candidate
+    return migrated
+
+
+def sanitize_class_conf_thresholds(
+    class_names: dict[int, str], thresholds: dict[int, float]
+) -> dict[int, float]:
+    """
+    ينظّف خريطة عتبات الثقة لكل فئة بعد ترحيل الأوزان.
+
+    أرقام الفئات (class ids) في ``.env`` القديم ممكن تشير لفئات مش موجودة في
+    الوزن الجديد — الإبقاء عليها بيغلط العتبات على فئات تانية خالص، فبنرمي
+    أي id مش معروف للموديل المحمّل ونسجّله في اللوج.
+    """
+    if not thresholds:
+        return {}
+    valid_ids = set(class_names)
+    kept = {cid: thr for cid, thr in thresholds.items() if cid in valid_ids}
+    dropped = sorted(set(thresholds) - set(kept))
+    if dropped:
+        logger.warning(
+            "Dropped class-conf thresholds for unknown class ids %s (model classes: %s)",
+            dropped,
+            sorted(valid_ids),
+        )
+    return kept
 
 
 class PPEDetector:
@@ -106,7 +195,10 @@ class PPEDetector:
         self.model = YOLO(resolved_path)
         self.confidence = confidence
         self.default_class_conf = default_class_conf
-        self.class_conf = settings.parse_class_thresholds_str(class_conf_thresholds)
+        # بعد ترحيل الأوزان: أي عتبة لفئة مش موجودة في الموديل الجديد بتتشال
+        self.class_conf = sanitize_class_conf_thresholds(
+            self.model.names, settings.parse_class_thresholds_str(class_conf_thresholds)
+        )
         self._lock = threading.Lock()
 
         logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, confidence)

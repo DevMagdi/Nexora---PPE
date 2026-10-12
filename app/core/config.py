@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     SKIN_EYE_BRIDGE_ENABLED: bool = True
     SKIN_MIN_RATIO: float = 0.18
     SKIN_STRONG_RATIO: float = 0.32
+    # نسبة رفض القفاز: لو 24% أو أكتر من بوكس "Gloves" جلد مكشوف => قفاز وهمي => NO-Gloves
+    SKIN_GLOVE_REJECT_RATIO: float = 0.24
     SKIN_BARE_HAND_MIN_THICKNESS: float = 0.12
     SKIN_BARE_HAND_MIN_AREA: float = 0.10
     SKIN_EYE_BRIDGE_MIN_SKIN_RATIO: float = 0.22

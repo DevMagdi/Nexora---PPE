@@ -63,12 +63,29 @@ OPPOSITE_CLASSES: tuple[tuple[str, str], ...] = (
 # الفئات اللي بيتحقق منها فلتر الجلد
 SKIN_CHECKED_CLASSES = ("NO-Mask", "Mask", "NO-Gloves", "Gloves", "NO-Goggles", "Goggles")
 
+# فئات إنشائية خالصة ملهاش معنى في البروفايل الطبي — الجسر الإنشائي بيشيلها
+# لما كاميرا طبية تستعين بالموديل الإنشائي (اللي بيوفر Person + القطع المشتركة)
+CONSTRUCTION_ONLY_CLASSES: frozenset[str] = frozenset(
+    {
+        "Hardhat",
+        "NO-Hardhat",
+        "Safety Vest",
+        "NO-Safety Vest",
+        "Safety Boots",
+        "NO-Safety Boots",
+    }
+)
+
 SYNTHETIC_CLASS_ID = -1
 SOURCE_MODEL = "model"
 SOURCE_EYE_BRIDGE = "skin:eye_bridge"
+SOURCE_ANATOMICAL_BRIDGE = "skin:anatomical_bridge"
 SOURCE_GLASS = "skin:glass_band"
 SOURCE_MOUTH = "skin:mouth"
 SOURCE_HAND = "skin:distance_transform"
+
+# أقصى عدد وشوش يفحصها الجسر التشريحي في الفريم الواحد (تحديد تكلفة)
+ANATOMICAL_BRIDGE_MAX_FACES = 4
 
 # لو الموديل واثق بشكل كبير جدًا في الفئة الموجبة، منقلبهاش إلا بدليل أقوى
 POSITIVE_OVERRIDE_MAX_CONF = 0.75
@@ -87,6 +104,7 @@ class HybridConfig:
     eye_bridge_enabled: bool = True
     skin_min_ratio: float = 0.18
     skin_strong_ratio: float = 0.32
+    glove_reject_ratio: float = 0.24
     bare_hand_min_thickness: float = 0.12
     bare_hand_min_area: float = 0.10
     eye_bridge_min_skin_ratio: float = 0.22
@@ -105,6 +123,7 @@ class HybridConfig:
             eye_bridge_enabled=s.SKIN_EYE_BRIDGE_ENABLED,
             skin_min_ratio=s.SKIN_MIN_RATIO,
             skin_strong_ratio=s.SKIN_STRONG_RATIO,
+            glove_reject_ratio=s.SKIN_GLOVE_REJECT_RATIO,
             bare_hand_min_thickness=s.SKIN_BARE_HAND_MIN_THICKNESS,
             bare_hand_min_area=s.SKIN_BARE_HAND_MIN_AREA,
             eye_bridge_min_skin_ratio=s.SKIN_EYE_BRIDGE_MIN_SKIN_RATIO,
@@ -122,6 +141,7 @@ class HybridStats:
     merged: int = 0
     duplicates: int = 0
     conflicts: int = 0
+    bridged: int = 0
     bare_hands: int = 0
     eye_bridge_hits: int = 0
     glass_confirmations: int = 0
@@ -135,6 +155,7 @@ class HybridStats:
             "merged": self.merged,
             "duplicates": self.duplicates,
             "conflicts": self.conflicts,
+            "bridged": self.bridged,
             "bare_hands": self.bare_hands,
             "eye_bridge_hits": self.eye_bridge_hits,
             "glass_confirmations": self.glass_confirmations,
@@ -291,6 +312,9 @@ class HybridPPEDetector:
                 stats.construction = len(found)
             else:
                 stats.medical = len(found)
+            if profile == "medical" and source_name == "construction":
+                # الجسر الإنشائي: نعدي للبروفايل الطبي الكشوف اللي تفيده فقط
+                found = self._bridge_construction_to_medical(found, stats)
             raw.extend(found)
 
         merged, duplicates = self._merge(raw)
@@ -305,6 +329,38 @@ class HybridPPEDetector:
         stats.synthetic = sum(1 for d in merged if d.class_id == SYNTHETIC_CLASS_ID)
         self.last_stats = stats
         return merged
+
+    # ------------------------------------------------------------------
+    # Construction → Medical bridge
+    # ------------------------------------------------------------------
+
+    def _bridge_construction_to_medical(
+        self, detections: list[Detection], stats: HybridStats
+    ) -> list[Detection]:
+        """
+        الجسر الإنشائي للبروفايل الطبي.
+
+        الموديل الطبي معندوش فئة ``Person`` خالص، فكاميرات المستشفيات بتستعين
+        بالموديل الإنشائي. بس مش كل كشوفه تفيد هنا: الخوذة/الفيست/البوت
+        فئات إنشائية خالصة، ولو دخلت البروفايل الطبي هتلوّث العدادات والعرض.
+        الجسر بيعدي بس:
+
+        * ``Person`` — لربط القطع بالأشخاص وتمكين فحص "الطاقم موجود والبالطو غايب".
+        * القطع المشتركة بين القطاعين (الكمامة/النظارة/الجوانتي) بأسمائها الموحّدة.
+
+        ويتم تسجيل عدد الكشوف المعبّرة في ``stats.bridged`` للمراقبة.
+        """
+        bridged: list[Detection] = []
+        for det in detections:
+            if canonical_class_name(det.class_name) in CONSTRUCTION_ONLY_CLASSES:
+                logger.debug(
+                    "construction->medical bridge dropped %s (construction-only class)",
+                    det.class_name,
+                )
+                continue
+            bridged.append(det)
+        stats.bridged += len(bridged)
+        return bridged
 
     # ------------------------------------------------------------------
     # Merging
@@ -435,6 +491,10 @@ class HybridPPEDetector:
     ) -> list[Detection]:
         persons = [d for d in detections if canonical_class_name(d.class_name) == "Person"]
         if not persons:
+            # مفيش Person في الكادر (كاميرا طبية والمساعد الإنشائي مقفول مثلًا) —
+            # الجسر التشريحي بيستخدم الكمامة المكتشفة كمرجع تشريحي لفحص خط العينين
+            if self.config.eye_bridge_enabled:
+                self._append_anatomical_eye_bridge(frame, detections, stats)
             return detections
 
         for person in persons:
@@ -496,6 +556,71 @@ class HybridPPEDetector:
             result.eyes_found,
             confidence,
         )
+
+    @staticmethod
+    def _eye_zone_above_mask(box: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
+        """
+        منطقة خط العينين المستنتجة تشريحيًا من بوكس الكمامة.
+
+        الكمامة بتغطي الأنف والفم، فخط العينين/جسر الأنف بيكون مباشرة فوق حافتها
+        العليا: ناخد شريطًا عرضه أعرض شوية من الكمامة وارتفاعه ممتد لفوق.
+        """
+        x1, y1, x2, y2 = box
+        w = max(1, x2 - x1)
+        h = max(1, y2 - y1)
+        zx1 = x1 - int(w * 0.15)
+        zx2 = x2 + int(w * 0.15)
+        zy1 = y1 - int(h * 0.85)
+        zy2 = y1 + int(h * 0.25)
+        if zx2 - zx1 < 16 or zy2 - zy1 < 16:
+            return None
+        return (zx1, zy1, zx2, zy2)
+
+    def _append_anatomical_eye_bridge(
+        self, frame: np.ndarray, detections: list[Detection], stats: HybridStats
+    ) -> None:
+        """
+        الجسر التشريحي (Anatomical Eye Bridge).
+
+        فحص جسر العينين الأصلي بيحتاج مستطيل ``Person`` عشان يستنتج منطقة الرأس،
+        لكن كاميرات القطاع الطبي ممكن تشتغل من غير فئة Person (الموديل الطبي
+        معندوش الفئة، والمساعد الإنشائي ممكن يكون مقفول). الحل: كل كشف ``Mask``
+        هو دليل تشريحي — الوش موجود، وخط العينين فوق الكمامة مباشرة. نفحص
+        الشريط ده بنفس اختبار ``eye_bridge_exposed`` ونضيف ``NO-Goggles`` لو
+        جسر الأنف مكشوف، ونشيل أي ``Goggles`` ضعيفة على نفس المنطقة.
+        """
+        masks = [d for d in detections if canonical_class_name(d.class_name) == "Mask"]
+        for mask in masks[:ANATOMICAL_BRIDGE_MAX_FACES]:
+            zone = self._eye_zone_above_mask(detection_box(mask))
+            if zone is None:
+                continue
+
+            face = crop_region(frame, zone, pad=0.05)
+            if face is None:
+                continue
+
+            result: EyeBridgeResult = eye_bridge_exposed(
+                face, min_skin_ratio=self.config.eye_bridge_min_skin_ratio
+            )
+            if not result.exposed:
+                continue
+
+            confidence = self._skin_confidence(result.confidence)
+            det = self._upsert(detections, "NO-Goggles", confidence, zone, SOURCE_ANATOMICAL_BRIDGE)
+            stats.eye_bridge_hits += 1
+
+            # الوش مكشوف => لو فيه كشف نظارة ضعيف على نفس المنطقة نشيله
+            if confidence >= 0.55:
+                removed = self._drop(detections, "Goggles", zone, max_conf=POSITIVE_OVERRIDE_MAX_CONF)
+                if removed and det in detections:
+                    det.confidence = self._skin_confidence(confidence + 0.05)
+
+            logger.debug(
+                "anatomical eye-bridge (mask anchor): skin_ratio=%.2f eyes=%d conf=%.2f",
+                result.skin_ratio,
+                result.eyes_found,
+                confidence,
+            )
 
     def _check_mouth_skin(
         self, frame: np.ndarray, detections: list[Detection], head: tuple[int, int, int, int], stats: HybridStats
@@ -582,9 +707,11 @@ class HybridPPEDetector:
                 continue
 
             # فئة موجبة (قفاز) لكن المنطقة جلد سميك => قفاز وهمي => يد عارية
+            # نسبة رفض القفاز (glove_reject_ratio=0.24 افتراضيًا): ربع بوكس القفاز
+            # جلد مكشوف كفاية لرفض الكشف — القفاز الحقيقي مبيبانوش جلد في نصه
             if (
                 hand.is_bare
-                and hand.skin_ratio >= self.config.skin_strong_ratio
+                and hand.skin_ratio >= self.config.glove_reject_ratio
                 and det.confidence <= POSITIVE_OVERRIDE_MAX_CONF
             ):
                 self._drop(detections, "Gloves", box, max_conf=POSITIVE_OVERRIDE_MAX_CONF)
@@ -597,9 +724,10 @@ class HybridPPEDetector:
                 )
                 stats.bare_hands += 1
                 logger.debug(
-                    "glove downgraded to NO-Gloves: thickness=%.2f ratio=%.2f",
+                    "glove downgraded to NO-Gloves: thickness=%.2f ratio=%.2f reject_ratio=%.2f",
                     hand.thickness,
                     hand.skin_ratio,
+                    self.config.glove_reject_ratio,
                 )
 
         # أي شخص مالوش أي دليل قفاز في الفريم → نمسح مناطق اليدين بأنفسنا

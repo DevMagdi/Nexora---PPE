@@ -72,10 +72,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.MEDICAL_DETECTION_CONFIDENCE,
         settings.MEDICAL_DEFAULT_CLASS_CONF,
         settings.MEDICAL_CLASS_CONF_THRESHOLDS,
-        fallbacks=(
-            "Model/bestMedicalModel2.pt",
-            "Model/ppe_medical.pt",
-        ),
+        # ملاحظة: bestMedicalModel2.pt وزن مرفود — الترحيل الآمن في detector.py
+        # بيحوّل أي إعداد قديم يشير إليه إلى bestMedicalModel.pt تلقائيًا
+        fallbacks=("Model/ppe_medical.pt",),
     )
 
     if settings.HYBRID_DETECTION_ENABLED:

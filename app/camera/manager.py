@@ -18,7 +18,13 @@ from app.core.config import settings
 from app.core.detector import PPEDetector, is_skin_source
 from app.core.frame_annotator import annotate_frame
 from app.core.logging import get_logger
-from app.core.ppe import Profile, canonical_class_name, sanitize_enabled_classes
+from app.core.ppe import (
+    CANONICAL_MAP,
+    Profile,
+    canonical_class_name,
+    class_key,
+    sanitize_enabled_classes,
+)
 from app.core.violation_checker import (
     BaseViolationChecker,
     ConstructionViolationChecker,
@@ -278,6 +284,32 @@ class CameraManager:
         """عدد الكشوف اللي أكّدها/ولّدها فلتر الجلد (distanceTransform / جسر العينين)."""
         return sum(1 for d in detections if is_skin_source(getattr(d, "source", None)))
 
+    def _filter_detections_for_display(
+        self, profile: Profile, enabled_classes: list[str], detections: list
+    ) -> list:
+        """
+        مزامنة العرض مع قواعد الكاميرا (rule-synced display).
+
+        فاحص المخالفات بيشتغل على الفئات المفعّلة للكاميرا فقط، فالعرض لازم
+        يعكس نفس القواعد بالظبط: يُرسم ``Person`` (للسياق) + الفئات الموجبة/
+        السالبة التابعة للمفاتيح المفعّلة — بما فيها الكشوف المولّدة من فلتر
+        الجلد. أي فئة مش مفعّلة على الكاميرا متظهرش على البث ولا في الأسطر
+        الإحصائية، حتى لو الموديل كشفها.
+        """
+        allowed_keys = {"person"}
+        for key in enabled_classes or []:
+            cfg = CANONICAL_MAP.get(profile, {}).get(key)
+            if not cfg:
+                continue
+            for name in (cfg.get("positive"), cfg.get("negative")):
+                if name:
+                    allowed_keys.add(class_key(name))
+        return [
+            d
+            for d in detections
+            if class_key(canonical_class_name(d.class_name)) in allowed_keys
+        ]
+
     def _compute_counts(self, profile: Profile, detections: list) -> dict:
         # العدّاد بيربط الكلاس الموحّد (canonical) بالخانات اللي الفرونت بيقراها،
         # فبيشتغل مع موديل طبي (no mask) أو إنشائي (NO-Mask) أو كشف من فلتر الجلد.
@@ -388,10 +420,16 @@ class CameraManager:
                 await self._handle_violations(entry, violations, frame)
 
                 show_alert = time.time() < entry.alert_sent_until
+                # مزامنة العرض مع القواعد: البث والأسطر الإحصائية يعكسان فقط
+                # الفئات المفعّلة لهذه الكاميرا (تيليمتري الـ WebSocket كاملة كما هي)
+                display_detections = self._filter_detections_for_display(
+                    entry.profile, entry.enabled_classes, detections
+                )
+                display_counts = self._compute_counts(entry.profile, display_detections)
                 annotated = annotate_frame(
                     frame,
-                    detections,
-                    stats_lines=self._stats_lines(entry.profile, entry.latest_counts),
+                    display_detections,
+                    stats_lines=self._stats_lines(entry.profile, display_counts),
                     show_alert_sent=show_alert,
                 )
                 resized = cv2.resize(annotated, (640, 480))
