@@ -11,8 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from app.camera.manager import CameraManager
 from app.core.detector import Detection
-from app.core.hybrid_detector import HybridPPEDetector
+from app.core.hybrid_detector import HybridConfig, HybridPPEDetector
 from app.core.ppe import canonical_class_name
 from app.core.skin_analysis import hand_candidate_boxes, head_box
 from app.core.violation_checker import ConstructionViolationChecker, MedicalViolationChecker
@@ -31,7 +32,7 @@ class StubDetector:
     def detect(self, frame: np.ndarray) -> list[Detection]:  # noqa: ARG002
         return [
             Detection(
-                class_id=0,
+                class_id=d.class_id,
                 class_name=d.class_name,
                 confidence=d.confidence,
                 x1=d.x1,
@@ -116,3 +117,31 @@ def test_gloved_hands_scene_does_not_report_bare_hands(hybrid):
     assert "NO-Gloves" not in names
     # الوش لسه مكشوف فمخالفات الكمامة/النظارة لازم تفضل موجودة
     assert {"NO-Goggles", "NO-Mask"} <= names
+
+
+def test_medical_no_head_cap_reaches_display_and_violation_checker():
+    """الفئة الطبية السالبة للكاب تمرّ من الموديل الهجين للعرض والتنبيه."""
+    construction = StubDetector([person_detection()])
+    medical = StubDetector([Detection(8, "no head cap", 0.82, 250, 40, 370, 115, (0, 0, 255))])
+    hybrid = HybridPPEDetector(
+        construction,
+        medical,
+        primary_profile="medical",
+        config=HybridConfig(skin_filter_enabled=False),
+        run_construction_assist=True,
+    )
+
+    detections = hybrid.detect(bare_face_scene(), profile="medical")
+    no_cap = [d for d in detections if canonical_class_name(d.class_name) == "NO-Head Cap"]
+    assert len(no_cap) == 1
+    assert no_cap[0].class_id == 8
+    assert no_cap[0].source == "model:medical"
+
+    manager = CameraManager({})
+    displayed = manager._filter_detections_for_display("medical", ["cap"], detections)
+    assert any(canonical_class_name(d.class_name) == "NO-Head Cap" for d in displayed)
+
+    checker = MedicalViolationChecker(cooldown_seconds=0, persist_seconds=0)
+    checker.check(3, detections, enabled_classes=["cap"])  # initialize the per-camera timer
+    violations = checker.check(3, detections, enabled_classes=["cap"])
+    assert [v.violation_type for v in violations] == ["no head cap"]

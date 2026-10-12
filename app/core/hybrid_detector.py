@@ -642,21 +642,44 @@ class HybridPPEDetector:
         for person in persons:
             person_box = detection_box(person)
             head = head_box(person_box, self.config.head_region_ratio)
+            face_anchor = self._expanded_head_box(head)
 
             if self.config.eye_bridge_enabled:
-                self._check_eye_bridge(frame, detections, head, stats)
+                self._check_eye_bridge(frame, detections, head, stats, association_box=face_anchor)
 
-            self._check_mouth_skin(frame, detections, head, stats)
+            self._check_mouth_skin(frame, detections, head, stats, association_box=face_anchor)
 
         # اليدين بتتفحص مرة واحدة على مستوى الفريم (مع ربط كل قفاز بأقرب شخص)
         self._verify_glove_detections(frame, detections, persons, stats)
 
         return detections
 
+    @staticmethod
+    def _expanded_head_box(head: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        """منطقة ربط أوسع قليلًا لتعويض اختلاف موضع/حجم بوكسات الوجه بين الموديلات.
+
+        لا تُستخدم لقص الصورة أو لصناعة كشف جديد؛ هي فقط تمنع إضافة كشف جلد ثانٍ
+        عندما يكون كشف الموديل للوجه مزاحًا عدة بكسلات عن تقدير الرأس.
+        """
+        x1, y1, x2, y2 = head
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+        pad_x = max(2, int(round(width * 0.12)))
+        pad_top = max(2, int(round(height * 0.08)))
+        pad_bottom = max(2, int(round(height * 0.24)))
+        return (x1 - pad_x, y1 - pad_top, x2 + pad_x, y2 + pad_bottom)
+
     def _check_eye_bridge(
-        self, frame: np.ndarray, detections: list[Detection], head: tuple[int, int, int, int], stats: HybridStats
+        self,
+        frame: np.ndarray,
+        detections: list[Detection],
+        head: tuple[int, int, int, int],
+        stats: HybridStats,
+        *,
+        association_box: tuple[int, int, int, int] | None = None,
     ) -> None:
         """كشف الوش المكشوف ما بين العينين => ``NO-Goggles``."""
+        association_box = association_box or head
         if min(head[2] - head[0], head[3] - head[1]) < 16:
             return
 
@@ -671,7 +694,7 @@ class HybridPPEDetector:
             # شريط زجاجي على خط العينين => تأكيد إن النظارة موجودة فعلاً
             # (بشرط عدم وجود كشف سالب صريح من الموديل على نفس الرأس)
             if result.glass_ratio >= self.config.glass_confirm_min_ratio and not self._has_conflicting_positive(
-                detections, "NO-Goggles", head, anchor_box=head
+                detections, "NO-Goggles", head, anchor_box=association_box
             ):
                 confidence = self._skin_confidence(
                     0.50
@@ -680,7 +703,14 @@ class HybridPPEDetector:
                         result.glass_ratio, self.config.glass_confirm_min_ratio, 0.25
                     )
                 )
-                self._upsert(detections, "Goggles", confidence, head, SOURCE_GLASS, anchor_box=head)
+                self._upsert(
+                    detections,
+                    "Goggles",
+                    confidence,
+                    head,
+                    SOURCE_GLASS,
+                    anchor_box=association_box,
+                )
                 stats.glass_confirmations += 1
                 logger.debug("glass band confirmed goggles: ratio=%.2f", result.glass_ratio)
             return
@@ -695,16 +725,25 @@ class HybridPPEDetector:
                 "Goggles",
                 head,
                 max_conf=self.config.positive_override_max_conf,
-                anchor_box=head,
+                anchor_box=association_box,
             )
 
         # إذا بقيت نظارة موجبة من الموديل على نفس الرأس، لا نضيف NO-Goggles فوقها
         # حتى لا يظهر Goggles و NO-Goggles معاً في نفس الفريم
-        if self._has_conflicting_positive(detections, "Goggles", head, anchor_box=head):
+        if self._has_conflicting_positive(
+            detections, "Goggles", head, anchor_box=association_box
+        ):
             return
 
         boosted_conf = self._skin_confidence(confidence + 0.05) if removed else confidence
-        self._upsert(detections, "NO-Goggles", boosted_conf, head, SOURCE_EYE_BRIDGE, anchor_box=head)
+        self._upsert(
+            detections,
+            "NO-Goggles",
+            boosted_conf,
+            head,
+            SOURCE_EYE_BRIDGE,
+            anchor_box=association_box,
+        )
         stats.eye_bridge_hits += 1
 
         logger.debug(
@@ -795,9 +834,16 @@ class HybridPPEDetector:
             )
 
     def _check_mouth_skin(
-        self, frame: np.ndarray, detections: list[Detection], head: tuple[int, int, int, int], stats: HybridStats
+        self,
+        frame: np.ndarray,
+        detections: list[Detection],
+        head: tuple[int, int, int, int],
+        stats: HybridStats,
+        *,
+        association_box: tuple[int, int, int, int] | None = None,
     ) -> None:
         """كشف جلد الأنف/الفم => ``NO-Mask``."""
+        association_box = association_box or head
         # منطقة أصغر من كده مش وش مقروء — أي "جلد" فيها ضوضاء (رقبة/خلفية)
         if min(head[2] - head[0], head[3] - head[1]) < 24:
             return
@@ -825,10 +871,12 @@ class HybridPPEDetector:
                 "Mask",
                 lower,
                 max_conf=self.config.positive_override_max_conf,
-                anchor_box=head,
+                anchor_box=association_box,
             )
 
-        if self._has_conflicting_positive(detections, "Mask", lower, anchor_box=head):
+        if self._has_conflicting_positive(
+            detections, "Mask", lower, anchor_box=association_box
+        ):
             return
 
         boosted_conf = self._skin_confidence(confidence + 0.05) if removed else confidence
@@ -838,7 +886,7 @@ class HybridPPEDetector:
             boosted_conf,
             lower,
             SOURCE_MOUTH,
-            anchor_box=head,
+            anchor_box=association_box,
         )
         stats.mouth_skin_hits += 1
 

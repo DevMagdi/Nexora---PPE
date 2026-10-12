@@ -388,3 +388,63 @@ def test_mouth_skin_does_not_duplicate_existing_head_no_mask():
     assert no_masks[0].confidence == 0.96
     assert "model:construction" in no_masks[0].source
 
+
+def test_mouth_skin_merges_model_no_mask_slightly_below_estimated_head():
+    """صندوقا الموديل والجلد المزاحان قليلًا على الوجه يظلان كشف NO-Mask واحدًا."""
+    construction = StubDetector(
+        [
+            det("Person", (200, 40, 420, 460), 0.85),
+            # مركز الصندوق أسفل حد head_box بقليل، لكنه ما زال يخص الوجه نفسه.
+            det("NO-Mask", (225, 178, 395, 202), 0.96),
+        ]
+    )
+    hybrid = HybridPPEDetector(
+        construction,
+        None,
+        primary_profile="medical",
+        run_construction_assist=True,
+    )
+
+    detections = hybrid.detect(frame_with_person(), profile="medical")
+    no_masks = [d for d in detections if canonical_class_name(d.class_name) == "NO-Mask"]
+
+    assert len(no_masks) == 1
+    assert no_masks[0].confidence == 0.96
+    assert "model:construction" in no_masks[0].source
+    assert "skin:mouth" in no_masks[0].source
+
+
+def test_expanded_face_anchor_does_not_merge_adjacent_people():
+    """دمج الوجه لا يبتلع مخالفة شخص مجاور في مشهد مزدحم."""
+    person_boxes = [(70, 40, 270, 460), (370, 40, 570, 460)]
+    frame = np.full((480, 640, 3), (90, 90, 90), dtype=np.uint8)
+    detections = [det("Person", box, 0.85) for box in person_boxes]
+
+    for person_box in person_boxes:
+        x1, y1, x2, y2 = person_box
+        frame[y1:y2, x1:x2] = (60, 60, 60)
+        hx1, hy1, hx2, hy2 = head_box(person_box, 0.32)
+        frame[hy1:hy2, hx1:hx2] = SKIN_BGR
+        eye_y = hy1 + int((hy2 - hy1) * 0.42)
+        eye_h = max(4, (hy2 - hy1) // 9)
+        eye_w = max(4, (hx2 - hx1) // 9)
+        for ratio in (0.22, 0.78):
+            ex = hx1 + int((hx2 - hx1) * ratio)
+            frame[eye_y : eye_y + eye_h, ex : ex + eye_w] = (10, 10, 10)
+
+    # النموذج اكتشف NO-Mask على الشخص اليمين، قليلًا أسفل head_box.
+    detections.append(det("NO-Mask", (385, 178, 555, 202), 0.96))
+    hybrid = HybridPPEDetector(
+        StubDetector(detections),
+        None,
+        primary_profile="medical",
+        run_construction_assist=True,
+    )
+
+    output = hybrid.detect(frame, profile="medical")
+    no_masks = [d for d in output if canonical_class_name(d.class_name) == "NO-Mask"]
+
+    assert len(no_masks) == 2
+    assert sum("model:construction" in d.source for d in no_masks) == 1
+    assert sum("skin:mouth" in d.source for d in no_masks) == 2
+
