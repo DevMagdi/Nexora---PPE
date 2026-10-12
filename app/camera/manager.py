@@ -239,7 +239,12 @@ class CameraManager:
             )
             self._entries[camera_id] = entry
             entry.task = asyncio.create_task(self._process_loop(entry), name=f"camera-{camera_id}")
-            logger.info("Camera %d processing started (profile=%s)", camera_id, profile)
+            logger.info(
+                "Camera %d processing started (profile=%s enabled_classes=%s)",
+                camera_id,
+                profile,
+                entry.enabled_classes,
+            )
             return True
 
     async def _wait_for_first_frame(self, entry: _CameraEntry) -> bool:
@@ -520,8 +525,13 @@ class CameraManager:
                 if now_ts - entry.last_det_log >= 5:
                     entry.last_det_log = now_ts
                     sample = [
-                        (d.class_name, round(d.confidence, 2), d.source)
-                        for d in detections[:8]
+                        (
+                            d.class_name,
+                            round(d.confidence, 2),
+                            d.source,
+                            (d.x1, d.y1, d.x2, d.y2),
+                        )
+                        for d in detections[:12]
                     ]
                     hybrid_stats = getattr(detector, "last_stats", None)
                     cycle_fps = 1000 / max(entry.last_processing_ms, 1)
