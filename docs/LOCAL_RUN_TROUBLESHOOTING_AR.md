@@ -67,8 +67,9 @@ INFO:     Application startup complete.
 
 ### المشكلة 3: اتصال WebSocket قد يُرفض رغم أن صفحة الداشبورد من نفس السيرفر
 
-- كان التحقق يقبل فقط origins المكتوبة في `CORS_ORIGINS`؛ لذلك الـ SPA المبنية والمقدمة من FastAPI على `127.0.0.1:8000` أو عنوان محلي آخر قد ترى إعادة اتصال مستمرة.
-- الآن يُسمح بالـ origin المدرج صراحة أو بنفس origin الطلب نفسه (scheme + host)، وتظل الطلبات cross-origin غير الموثوقة مرفوضة. كما تُسجل أسباب رفض/فتح WebSocket والبث في backend بدون تسجيل أي توكن.
+- كان التحقق يقارن نص `Origin` مع `Host` حرفيًا، فأي اختلاف بين الاسمين المحليين (صفحة على `http://localhost:8000` والاتصال على `ws://127.0.0.1:8000` أو العكس) كان يرفض الاتصال بـ `403 untrusted origin` رغم أنه نفس الجهاز.
+- الآن المقارنة على مستوى **الـ hostname**: يُسمح بالـ origin المدرج صراحةً في `CORS_ORIGINS`، أو أي origin اسمه مطابق للـ Host، أو أحد أسماء loopback المعتادة (`localhost` / `127.0.0.1` / `::1`) مقابل بعضها. كل الدومينات الخارجية وأي محاولة انتحال (مثل `localhost.attacker.invalid`) تظل مرفوضة، والرفض الآن يسجّل قيمة الـ origin والـ host في اللوج لتشخيص أسرع.
+- إذا ظهر الرفض رغم ذلك فالمشكلة غالبًا **bundle قديم في كاش المتصفح**: أعِد بناء الواجهة (`npm run build`) — و`index.html` الآن يُخدم بـ `Cache-Control: no-store` لمنع هذه الحالة نهائيًا.
 
 ### المشكلة 4: JWT وSQL Server والتطوير المحلي
 
@@ -179,7 +180,7 @@ python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port
 | `...ODBC driver...` / `Data source name not found` | ثبّت ODBC Driver 18 وتأكد من اسم السيرفر والبورت |
 | `lock timeout` أثناء Alembic | أوقف النسخ الأخرى التي تستخدم القاعدة، وافحص معاملات SQL Server المفتوحة، ثم أعد التشغيل |
 | `no video frame arrived in time` | راجع index/خصوصية الكاميرا، اقفل التطبيقات الأخرى، وتأكد أن backend يعمل على الجهاز الذي لديه webcam أو أن الجهاز ممرر للحاوية |
-| `Rejected WebSocket ... untrusted origin` | افتح الداشبورد من origin مضبوط في `CORS_ORIGINS` أو استخدم نفس origin الذي يقدم الـ SPA |
+| `Rejected WebSocket ... untrusted origin` | راجع الـ origin والـ host المكتوبين في اللوج؛ افتح الداشبورد من نفس الجهاز/الـ origin المضبوط في `CORS_ORIGINS`، وأعِد بناء الواجهة لو الـ bundle قديم |
 | `Detection model weights not found ... Checked: ...` | ملف `.pt` ناقص — ضعه في `Model/` أو صحّح المسار في `.env` |
 | `The 'ultralytics' package is not installed...` | نفّذ الخطوة 1 (تثبيت الاعتماديات) |
 | `Frontend bundle not found — API-only mode` | **ليست مشكلة**: معناها أن الـ API شغال بدون واجهة مبنية — استخدم `npm run dev` للدشبورد |

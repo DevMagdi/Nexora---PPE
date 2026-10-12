@@ -222,6 +222,15 @@ def create_app() -> FastAPI:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         if request.url.path.startswith(("/api/", "/frames/")):
             response.headers["Cache-Control"] = "no-store"
+        elif request.url.path.startswith("/assets/"):
+            # Vite emits content-hashed filenames, so they are safe to cache
+            # forever; index.html (below) must never be cached or browsers
+            # keep booting a stale bundle after every redeploy.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif "." not in request.url.path.rsplit("/", 1)[-1]:
+            # SPA routes (and index.html itself) must always revalidate so the
+            # browser immediately picks up newly deployed bundles.
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     from app.api.routes.auth import router as auth_router

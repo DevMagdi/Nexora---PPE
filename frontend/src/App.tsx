@@ -728,9 +728,11 @@ interface LiveStageProps {
   onStart: () => void
   onStop: () => void
   onGoCameras: () => void
+  onStreamReady: () => void
+  onStreamLost: () => void
 }
 
-function LiveStage({ camera, metrics, status, compliance, pending, canOperate, onStart, onStop, onGoCameras }: LiveStageProps) {
+function LiveStage({ camera, metrics, status, compliance, pending, canOperate, onStart, onStop, onGoCameras, onStreamReady, onStreamLost }: LiveStageProps) {
   const [errorKey, setErrorKey] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
 
@@ -800,7 +802,11 @@ function LiveStage({ camera, metrics, status, compliance, pending, canOperate, o
         <img
           key={camera.id}
           src={streamSrc}
-          onError={() => setErrorKey(currentStreamKey)}
+          onLoad={onStreamReady}
+          onError={() => {
+            setErrorKey(currentStreamKey)
+            onStreamLost()
+          }}
           className="absolute inset-0 z-0 h-full w-full object-contain"
           alt={`البث المباشر من ${camera.name}`}
         />
@@ -1057,6 +1063,15 @@ export default function App() {
   const [selectedCameraId, setSelectedCameraId] = useState<number | null>(null)
   const [counts, setCounts] = useState<LiveCounts>({})
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("idle")
+  // أول فريم فعلي يوصل من MJPEG هو مصدر الحقيقة لشارة «مباشر» —
+  // الـ WebSocket بيفضل قناة الأرقام بس، ومش شرط يفتح الأول.
+  const [streamLive, setStreamLive] = useState(false)
+
+  const handleStreamReady = useCallback(() => setStreamLive(true), [])
+  const handleStreamLost = useCallback(() => {
+    setStreamLive(false)
+    setLiveStatus((prev) => (prev === "open" ? "reconnecting" : prev))
+  }, [])
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const [showAllTypes, setShowAllTypes] = useState(false)
   const [cameraSearch, setCameraSearch] = useState("")
@@ -1365,6 +1380,7 @@ export default function App() {
       window.clearTimeout(connectionTimer)
       ws?.close()
       setCounts({})
+      setStreamLive(false)
       setLiveStatus("idle")
     }
   }, [selectedCamera?.id, selectedCamera?.is_running])
@@ -1372,7 +1388,13 @@ export default function App() {
   const activeProfile = selectedCamera ? cameraProfile(selectedCamera) : meUser?.sector === "medical" ? "medical" : "construction"
   const isMedicalView = activeProfile === "medical"
   const activeCounts = selectedCamera?.is_running ? counts : {}
-  const activeLiveStatus: LiveStatus = selectedCamera?.is_running ? liveStatus : "idle"
+  const activeLiveStatus: LiveStatus = !selectedCamera?.is_running
+    ? "idle"
+    : streamLive
+      ? "open"
+      : liveStatus === "open"
+        ? "connecting"
+        : liveStatus
   const compliance = selectedCamera?.is_running ? computeCompliance(activeProfile, activeCounts) : undefined
   const liveWorkers = selectedCamera?.is_running && !isMedicalView ? activeCounts.person : undefined
   const medicalNegatives =
@@ -2074,6 +2096,8 @@ export default function App() {
                     onStart={() => selectedCamera && toggleCamera(selectedCamera)}
                     onStop={() => selectedCamera && toggleCamera(selectedCamera)}
                     onGoCameras={() => setTab("cameras")}
+                    onStreamReady={handleStreamReady}
+                    onStreamLost={handleStreamLost}
                   />
                 </Card>
               </div>
