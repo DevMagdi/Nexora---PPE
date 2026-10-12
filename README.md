@@ -51,9 +51,13 @@ Nexora---PPE/
 │   ├── core/              # Settings, JWT Auth, PPEDetector, HybridPPEDetector, SkinAnalysis, Checkers
 │   ├── db/                # SQLAlchemy 2.0 Async models, session, and repository helpers
 │   ├── schemas/           # Pydantic v2 request/response schemas
+│   ├── native_compat.py   # Pure-Python SQLAlchemy fallback for machines whose Application
+│   │                      #   Control policy blocks compiled modules (runs from app/__init__.py)
 │   └── main.py            # FastAPI application factory, lifespan, and SPA static serving
 ├── frontend/              # React 19 + TypeScript + Vite + Tailwind CSS v4 dashboard
 ├── migrations/            # Alembic database migrations (SQLite, PostgreSQL, SQL Server)
+├── scripts/               # gen_jwt_secret.py, setup_onprem.py, alembic_cli.py (guarded Alembic CLI),
+│                          #   check_native_deps.py (native-module doctor)
 ├── Model/                 # Bundled YOLO weights (ppe.pt, bestMedicalModel_FINAL.pt)
 │                          #   bestMedicalModel2.pt and bestMedicalModel.pt were RETIRED —
 │                          #   stale .env entries are auto-migrated to bestMedicalModel_FINAL.pt
@@ -97,6 +101,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
   see the Arabic guide [docs/LOCAL_RUN_TROUBLESHOOTING_AR.md](docs/LOCAL_RUN_TROUBLESHOOTING_AR.md).
   Recommended local command watches only the app code:
   `uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000`.
+- **`ImportError: DLL load failed while importing _row_cy: An Application Control policy has
+  blocked this file`?** Your Windows policy (WDAC / Smart App Control / AppLocker) refuses
+  SQLAlchemy's compiled Cython modules. Nexora detects this at startup and automatically
+  continues with SQLAlchemy's pure-Python modules — no code change and no downgrade needed.
+  Diagnose every native module (greenlet, pydantic_core, numpy, cv2, torch, …) with:
+  `python scripts/check_native_deps.py` (`--quick` skips the heavy ML imports).
+  For manual migration runs use `python scripts/alembic_cli.py upgrade head` instead of
+  `python -m alembic …` (Alembic imports SQLAlchemy before `migrations/env.py` runs).
 
 #### Frontend (React + Vite)
 
@@ -191,6 +203,7 @@ Bare-metal deployments must meet the same requirements as Compose: explicit rand
 | `SKIN_POSITIVE_OVERRIDE_MAX_CONF` / `SKIN_POSITIVE_OVERRIDE_MIN_CONF` | `0.60` / `0.70` | A model positive may only be dropped below the max, and only by a heuristic at least as confident as the min |
 | `DETECTION_CONFIDENCE_FLOOR` | `0.25` | Any configured inference/class confidence below this is raised automatically (log warning) |
 | `DB_SQL_ECHO` | `false` | Echo every SQL statement to the log (previously always on in `dev`, printing each query twice) |
+| `DISABLE_SQLALCHEMY_CEXT` | *(unset)* | Force SQLAlchemy's pure-Python modules instead of the compiled Cython ones. Nexora also switches automatically when the OS blocks them (Windows Application Control). Works from `.env` or the environment; `DISABLE_SQLALCHEMY_CEXT_RUNTIME` is accepted as an alias |
 | `ALERT_COOLDOWN_SECONDS` | `60` | Minimum seconds between repeated alerts for the same PPE type per camera |
 | `VIOLATION_PERSIST_SECONDS` | `8` | Seconds a construction PPE violation must persist before triggering an alert |
 | `MEDICAL_VIOLATION_PERSIST_SECONDS` | `3` | Seconds a medical PPE violation must persist before triggering an alert |
@@ -263,11 +276,37 @@ pytest tests/unit/test_medical_model_final.py -v
 # real CPU inference against the approved weights (needs ultralytics/torch/cv2)
 pytest tests/integration/test_medical_model_inference.py -v
 pytest -m "not slow" tests/integration/test_medical_model_inference.py   # fast subset
+
+# native-module compatibility: reproduces a blocked/corrupt compiled SQLAlchemy
+# module and proves the pure-Python fallback still runs the ORM
+pytest tests/unit/test_native_compat.py -v
+python scripts/check_native_deps.py --quick          # what this machine blocks
+DISABLE_SQLALCHEMY_CEXT=1 pytest -m "not slow"       # whole suite without Cython modules
 ```
 
 ---
 
 ## ملخص التحديث بالعربية (Detection Update)
+
+### إصلاح الإقلاع على Windows (2026-10-12 — Application Control / DLL block)
+
+- **المشكلة:** على أجهزة Windows التي تفرض سياسة Application Control (WDAC / Smart App Control /
+  AppLocker) كان التشغيل يقف قبل ما FastAPI يبدأ أصلًا:
+  `ImportError: DLL load failed while importing _row_cy: An Application Control policy has blocked
+  this file` — لأن SQLAlchemy ≥ 2.1 بيستورد وحدات Cython المترجمة (`_*_cy.pyd`) بدون أي بديل،
+  وأي ملف مرفوض من السياسة بيوقف سلسلة الاستيراد كلها (alembic ← sqlalchemy ← app.main).
+- **الحل:** `app/native_compat.py` (بيشتغل من `app/__init__.py` قبل أي استيراد لـ SQLAlchemy) بيكتشف
+  رفض النظام للوحدات المترجمة وبيركّب import hook يحمّل النسخ النقية (pure-Python) الموجودة جنبها
+  في نفس الباكدج. النتيجة: السيرفر بيقلع عادي، والـ migrations والـ async engine وكل الـ APIs شغالة
+  بنفس السلوك — الفرق الوحيد أن معالجة الصفوف أبطأ شوية.
+- **بدون خطوات يدوية:** مفيش حاجة تتعمل في البيئة. ولو حابب تفرضها بنفسك (قبل ما السياسة تمنع وحدة
+  تانية مثلًا) ضع `DISABLE_SQLALCHEMY_CEXT=1` في `.env` أو في البيئة.
+- **التشخيص:** `python scripts/check_native_deps.py` بيفحص كل الوحدات المترجمة (sqlalchemy، greenlet،
+  pydantic_core، numpy، cv2، torch …) في عملية منفصلة، ويقول لك أيها مرفوض من السياسة وأيها تالف
+  وأيها ناقص، مع خطوات الإصلاح لكل حالة (بما فيها `Unblock-File` وإعادة إنشاء الـ venv).
+- **التغطية:** `tests/unit/test_native_compat.py` بيعيد إنتاج العطل فعليًا (نسخة من SQLAlchemy
+  وحداتها المترجمة مقروءة بشكل تالف) وبيتأكد أن التطبيق بيرجع للنسخ النقية ويشتغل، وأن العلم
+  `DISABLE_SQLALCHEMY_CEXT` بيعمل نفس الشيء، وأن الاستيراد لا يتم استبداله بعد ما SQLAlchemy تبقى محمّلة.
 
 ### تحديث الدقة والحراس (2026-10-12 — Precision & Medical Firewall)
 

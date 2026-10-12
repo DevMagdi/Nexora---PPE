@@ -175,6 +175,7 @@ python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port
 
 | الرسالة | المعنى والحل |
 |---|---|
+| `ImportError: DLL load failed while importing _row_cy: An Application Control policy has blocked this file` | سياسة Windows بترفض وحدات SQLAlchemy المترجمة — Nexora بيكمّل تلقائيًا بالنسخ النقية؛ التفاصيل والخطوات في القسم 7، والتشخيص الكامل بـ `python scripts/check_native_deps.py` |
 | `JWT_SECRET is too weak for HS256: it is 22 bytes long...` | نفّذ الخطوة 3 أعلاه |
 | `Database startup failed for mssql...` + `pip install -r requirements/mssql.txt` | نفّذ الخطوة 2 أعلاه |
 | `...ODBC driver...` / `Data source name not found` | ثبّت ODBC Driver 18 وتأكد من اسم السيرفر والبورت |
@@ -205,3 +206,144 @@ ALLOWED_VIDEO_DIR=./videos
 
 - `ALLOWED_RTSP_PREFIXES` فارغة = كل مصادر الشبكة مقفولة (الوضع الآمن الافتراضي).
 - لا تستخدم قيم هذا الملف في الإنتاج — الإنتاج له `python scripts/setup_onprem.py`.
+\n
+---
+
+## 7. `ImportError: DLL load failed ... An Application Control policy has blocked this file`
+
+### شكل الخطأ الكامل
+
+```text
+File "...\Nexora---PPE\app\main.py", line 10, in <module>
+    from alembic import command
+...
+File "...\.venv\Lib\site-packages\sqlalchemy\engine\result.py", line 34, in <module>
+    from ._result_cy import _InterimRowType
+File "...\.venv\Lib\site-packages\sqlalchemy\engine\row.py", line 27, in <module>
+    from ._row_cy import BaseRow as BaseRow
+ImportError: DLL load failed while importing _row_cy: An Application Control policy has blocked this file.
+```
+
+السيرفر بيقف **قبل** `Application startup complete` — يعني قبل migrations وقبل أي route.
+
+### السبب الحقيقي (مش كود Nexora)
+
+- SQLAlchemy ≥ 2.1 بيشحن مسرّعات Cython اختيارية كوحدات مترجمة (`engine\_row_cy.cp312-win_amd64.pyd`،
+  `_result_cy.pyd`، `_util_cy.pyd`، `_processors_cy.pyd`، `sql\_cache_key_cy.pyd`،
+  `util\_collections_cy.pyd` …) وجنبها **نفس الاسم** بصيغة `.py` نقية.
+- Python بيفضّل الامتداد المترجم على `.py`، والاستيراد في 2.1 مباشر بدون `try/except` — فلو النظام رفض
+  الـ `.pyd` **مفيش رجوع تلقائي** للنسخة النقية، والخطأ بيقطع السلسلة كلها:
+  `app.main` ← `alembic` ← `sqlalchemy`.
+- رسالة "An Application Control policy has blocked this file" معناها أن **WDAC / Smart App Control /
+  AppLocker** على الجهاز رفضت تحميل الملف (غير موقّع أو غير معروف السمعة). دي سياسة جهاز، مش خطأ في
+  المشروع ولا في بايثون.
+- للتوضيح: SQLAlchemy 2.0.x كان بيتعامل مع الحالة لوحده (بيمسك `ImportError` ويرجع لـ `_py_row.py`)،
+  لذلك الخطأ ظهر بعد ما `pip install -r requirements.txt` سحب 2.1.x (المتطلب `sqlalchemy>=2.0.50`).
+
+### الحل المُركّب في Nexora (تلقائي — مفيش خطوة يدوية)
+
+`app/native_compat.py` بيشتغل من `app/__init__.py` قبل أي استيراد لـ SQLAlchemy:
+
+1. يجرّب `import sqlalchemy`.
+2. لو فشل بخطأ تحميل وحدة مترجمة، بيركّب import hook في `sys.meta_path` يحمّل النسخ النقية `*_cy.py`
+   الموجودة في نفس الباكدج بدل الـ `.pyd` المرفوضة، وبيمسح أي وحدات SQLAlchemy نص-محمّلة.
+3. يعيد الاستيراد ويكمّل، مع سطر تحذير واحد في اللوج:
+
+```text
+WARNING | app.native_compat | SQLAlchemy compiled (Cython) modules are unavailable (...) — falling back to
+SQLAlchemy's pure-Python modules (8 redirected, 0 hidden). Behaviour is unchanged; row processing is
+slightly slower.
+```
+
+بعدها السيرفر بيقلع كامل: Alembic migrations ← `init_db` ← مستخدم الـ bootstrap ← مدير الكاميرات ←
+كل الـ APIs (login / cameras / violations / metrics / stream). الفرق الوحيد أن معالجة الصفوف أبطأ
+شوية بدون Cython — مقبول تمامًا مقابل أن التطبيق يشتغل.
+
+نفس الحماية مركّبة في `migrations/env.py` وفي `tests/conftest.py`، يعني دايمًا قبل أول
+`import sqlalchemy`. ولو الحارس اتطلب بعد ما SQLAlchemy بقت محمّلة فعلًا في نفس العملية، بيرفض
+التبديل ويطلّع تحذير واضح بدل ما يخلط نسختين من المكتبة (اللي كان بيبان كأخطاء غريبة زي
+`CREATE TABLE` فاضي).
+
+**تشغيل Alembic من غير التطبيق:** `python -m alembic upgrade head` بيستورد SQLAlchemy جوّه نقطة
+دخول Alembic نفسه — أي **قبل** ما `migrations/env.py` يشتغل — فعلى جهاز فيه السياسة دي هيفشل.
+استخدم الـ wrapper اللي بيركّب الحارس الأول:
+
+```powershell
+python scripts/alembic_cli.py upgrade head
+python scripts/alembic_cli.py current
+python scripts/alembic_cli.py revision --autogenerate -m "add widget table"
+```
+
+(التطبيق نفسه بيطبّق الـ migrations عند الإقلاع، فالـ wrapper مطلوب بس للتشغيل اليدوي/التشغيلي.)
+
+### لو حابب تفرض الوضع النقي بنفسك
+
+```powershell
+# PowerShell — قبل التشغيل
+$env:DISABLE_SQLALCHEMY_CEXT = "1"
+python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000
+```
+
+أو في `.env` (Nexora بيقرأ المفتاح ده من `.env` مباشرة، لأن الحارس بيشتغل قبل تحميل الإعدادات):
+
+```env
+DISABLE_SQLALCHEMY_CEXT=1
+```
+
+مفيد مثلًا لو عايز كل عمليات `--reload` تبدأ في نفس الوضع بدون ما تجرّب التحميل المرفوض كل مرة.
+الاسم `DISABLE_SQLALCHEMY_CEXT_RUNTIME` (بتاع SQLAlchemy 2.0) مقبول كمان.
+
+البديل الدائم — ثبّت SQLAlchemy بدون وحدات مترجمة (2.0.x كمان بترجع للنقي لوحدها):
+
+```powershell
+pip install --force-reinstall --no-binary sqlalchemy "sqlalchemy>=2.0.50,<2.1"
+```
+
+### التشخيص الكامل: في وحدة تانية مرفوضة؟
+
+```powershell
+python scripts/check_native_deps.py            # كل الاعتماديات (يشمل torch)
+python scripts/check_native_deps.py --quick    # بدون torch/torchvision/ultralytics
+python scripts/check_native_deps.py --json     # مخرجات آلية
+```
+
+السكريبت بيفحص كل اعتمادية في عملية منفصلة (فبيشوف الحقيقة حتى لو الوحدة بتوقّع العملية) وبيطبع:
+`OK` / `BLOCKED (policy)` / `BLOCKED (damaged)` / `not installed` / `ERROR`، مع نسخة كل باكدج، وهل
+الوحدة native أو pure-python، وهل فشلها سببه وحدة تانية (مثلاً `alembic` بيفشل لأن `sqlalchemy`
+مرفوضة — مش مشكلة مستقلة). و`exit code` بيبقى 1 لو في حاجة تمنع التشغيل فعلًا.
+
+**مهم:** لو المرفوض مش SQLAlchemy — مثلًا `greenlet` (الـ async engine محتاجه) أو `pydantic_core` أو
+`numpy` أو `cv2` أو `torch` — **مفيش بديل نقي** ليها، ولازم السياسة نفسها تسمح بها:
+
+1. **Smart App Control:** `Windows Security → App & browser control → Smart App Control settings`.
+   لو `On`، ويندوز بيمنع أي وحدة غير موقّعة ما يعرفهاش. إقفاله نهائي لحد إعادة تثبيت ويندوز، ففي جهاز
+   تابع لمؤسسة الأفضل طلب استثناء من IT.
+2. **WDAC / AppLocker (أجهزة الشركات):** اطلب من IT إدراج مجلد الـ venv
+   (`.venv\Lib\site-packages`) أو ناشر Python في قائمة السماح. الحدث بيتسجل في `Event Viewer →
+   Applications and Services Logs → Microsoft → Windows → CodeIntegrity` (و`AppLocker`).
+3. **لو الـ venv اتنسخ من جهاز تاني أو اتفك من أرشيف:** الملفات ممكن تكون عليها Mark-of-the-Web:
+   ```powershell
+   Get-ChildItem -Recurse .venv | Unblock-File
+   ```
+4. **أو أعد إنشاء البيئة** في مجلد محلي عادي (مش OneDrive ومش network share) — ده بيحل أيضًا حالة
+   `BLOCKED (damaged)` (نسخة ناقصة/بايظة أو venv مبني لإصدار بايثون تاني):
+   ```powershell
+   py -3.12 -m venv C:\dev\Nexora---PPE\.venv
+   C:\dev\Nexora---PPE\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
+5. بعدها أعد الفحص ثم شغّل السيرفر:
+   ```powershell
+   python scripts/check_native_deps.py
+   python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000
+   ```
+
+### التحقق بعد الإصلاح
+
+```powershell
+pytest tests/unit/test_native_compat.py -v            # الحارس نفسه (38 اختبار)
+pytest -m "not slow"                                  # كل الاختبارات السريعة
+$env:DISABLE_SQLALCHEMY_CEXT = "1"; pytest -m "not slow"   # نفس الاختبارات بدون وحدات Cython
+Remove-Item Env:DISABLE_SQLALCHEMY_CEXT
+curl.exe http://127.0.0.1:8000/api/v1/health          # {"status":"ok"}
+```

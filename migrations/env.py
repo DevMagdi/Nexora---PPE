@@ -5,11 +5,18 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
-
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
+
+# Alembic imports SQLAlchemy, so the native-extension guard has to run first: on
+# machines where an Application Control policy blocks SQLAlchemy's compiled
+# modules it swaps in the pure-Python twins (see app/native_compat.py).
+from app.native_compat import ensure_sqlalchemy_importable  # noqa: E402
+
+ensure_sqlalchemy_importable()
+
+from alembic import context  # noqa: E402
+from sqlalchemy import engine_from_config, pool  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.db.migration_runtime import migration_connect_args, set_migration_lock_timeout  # noqa: E402
