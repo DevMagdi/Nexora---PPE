@@ -88,6 +88,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 - **API Docs (Swagger UI):** `http://localhost:8000/docs`
 - **Health Check:** `http://localhost:8000/api/v1/health`
+- **Local-run problems?** (`InsecureKeyLengthWarning`, SQL Server drivers, slow `--reload`):
+  see the Arabic guide [docs/LOCAL_RUN_TROUBLESHOOTING_AR.md](docs/LOCAL_RUN_TROUBLESHOOTING_AR.md).
+  Recommended local command watches only the app code:
+  `uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000`.
 
 #### Frontend (React + Vite)
 

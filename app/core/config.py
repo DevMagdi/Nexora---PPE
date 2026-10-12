@@ -13,6 +13,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.password_policy import generate_password, password_issues
 
+# HS256 (RFC 7518, Section 3.2) needs a key of at least 32 bytes / 256 bits.
+# PyJWT only emits InsecureKeyLengthWarning for short keys, so Nexora validates
+# the secret at startup instead and fails fast with an actionable message.
+JWT_SECRET_MIN_BYTES = 32
+JWT_SECRET_MIN_UNIQUE_CHARS = 16
+
+
+def jwt_secret_issues(secret: str) -> list[str]:
+    """Return human-readable problems with a JWT HMAC secret (empty = strong)."""
+    value = secret or ""
+    issues: list[str] = []
+    secret_len = len(value.encode("utf-8"))
+    if secret_len < JWT_SECRET_MIN_BYTES:
+        issues.append(
+            f"it is {secret_len} bytes long but HS256 needs at least "
+            f"{JWT_SECRET_MIN_BYTES} bytes (RFC 7518, Section 3.2)"
+        )
+    if len(set(value)) < JWT_SECRET_MIN_UNIQUE_CHARS:
+        issues.append("it looks low-entropy (too few distinct characters for a random secret)")
+    return issues
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -140,6 +161,21 @@ class Settings(BaseSettings):
         if self.LOGIN_LOCKOUT_ATTEMPTS < 1 or self.LOGIN_LOCKOUT_MINUTES < 1:
             raise ValueError("Login lockout settings must be positive")
 
+        # A short JWT secret triggers PyJWT's InsecureKeyLengthWarning at login
+        # time and makes session/media tokens forgeable, so reject it in every
+        # environment (dev included) instead of only warning in the request log.
+        # The random dev default is strong; only an explicitly configured weak
+        # value can reach this error.
+        secret_issues = jwt_secret_issues(self.JWT_SECRET)
+        if secret_issues:
+            raise ValueError(
+                "JWT_SECRET is too weak for HS256: "
+                + "; ".join(secret_issues)
+                + ". Generate a strong value with `python scripts/gen_jwt_secret.py` "
+                "and set JWT_SECRET in your .env (or unset it in dev to use an "
+                "ephemeral random key)."
+            )
+
         if self.APP_ENV != "prod":
             return self
 
@@ -153,9 +189,9 @@ class Settings(BaseSettings):
                 "Production requires explicitly configured secrets: " + ", ".join(missing_secrets)
             )
 
-        if len(self.JWT_SECRET.encode("utf-8")) < 32 or len(set(self.JWT_SECRET)) < 16:
-            raise ValueError("JWT_SECRET must contain at least 32 bytes of high-entropy secret data")
-
+        # JWT strength is already enforced for every environment above; production
+        # additionally requires the secret to be explicitly configured (checked
+        # via model_fields_set) instead of falling back to a random default.
         issues = password_issues(self.BOOTSTRAP_PASSWORD, self.BOOTSTRAP_USERNAME)
         if issues:
             raise ValueError("BOOTSTRAP_PASSWORD does not meet policy: " + "; ".join(issues))

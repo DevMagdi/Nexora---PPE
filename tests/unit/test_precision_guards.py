@@ -99,7 +99,7 @@ def test_ppdetector_applies_floor_from_settings():
     with (
         patch.dict("sys.modules", {"ultralytics": fake_ultralytics}),
         patch("app.core.detector.settings", settings),
-        patch("app.core.detector.resolve_model_path", return_value="Model/x.pt"),
+        patch("app.core.detector.require_model_file", return_value="Model/x.pt"),
     ):
         from app.core.detector import PPEDetector
 

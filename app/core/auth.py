@@ -10,7 +10,7 @@ from jwt.exceptions import PyJWTError
 from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.config import jwt_secret_issues, settings
 from app.db.models import User
 from app.db.session import get_db
 
@@ -24,6 +24,23 @@ oauth2_scheme_optional = OAuth2PasswordBearer(
 )
 
 TokenType = Literal["access", "media"]
+
+
+def ensure_jwt_secret_strength() -> None:
+    """Fail closed when the configured JWT secret is too weak for HS256.
+
+    Settings validation already rejects weak values at startup; this guard also
+    covers a secret weakened at runtime (tests, embedding) and replaces PyJWT's
+    cryptic InsecureKeyLengthWarning with an actionable error.
+    """
+    issues = jwt_secret_issues(settings.JWT_SECRET)
+    if issues:
+        raise RuntimeError(
+            "JWT_SECRET is too weak for HS256: "
+            + "; ".join(issues)
+            + ". Set a strong JWT_SECRET (at least 32 random bytes) — generate one "
+            "with `python scripts/gen_jwt_secret.py`. See docs/LOCAL_RUN_TROUBLESHOOTING_AR.md."
+        )
 
 
 def hash_password(password: str) -> str:
@@ -44,6 +61,7 @@ def create_access_token(
     token_type: TokenType = "access",
     token_version: int = 0,
 ) -> str:
+    ensure_jwt_secret_strength()
     if expires_minutes is not None:
         minutes = expires_minutes
     elif token_type == "media":
@@ -69,6 +87,7 @@ def decode_token_payload(token: str, expected_type: TokenType = "access") -> dic
     )
     if not token:
         raise credentials_exception
+    ensure_jwt_secret_strength()
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
         if payload.get("token_type") != expected_type:
