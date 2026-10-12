@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { Suspense, lazy, useState } from "react"
 import {
   Activity,
   AlertTriangle,
@@ -14,7 +14,6 @@ import {
   Sun,
   User,
 } from "lucide-react"
-import App from "@/App"
 import PasswordChangeScreen from "@/auth/PasswordChangeScreen"
 import nexoraLogoColor from "@/assets/logo/nexora-logo-full-color.svg"
 import nexoraLogoWhite from "@/assets/logo/nexora-logo-full-white.svg"
@@ -24,6 +23,8 @@ import { Label } from "@/components/ui/label"
 import { useLogin, useMe } from "@/hooks/useNexora"
 import { useTheme } from "@/hooks/useUiHooks"
 import { getErrorMessage } from "@/lib/utils"
+
+const DashboardApp = lazy(() => import("@/App"))
 
 const BRAND_FEATURES = [
   {
@@ -75,7 +76,25 @@ export default function AuthGate() {
   }
 
   if (me?.must_change_password) return <PasswordChangeScreen username={me.username} />
-  if (me) return <App />
+  if (me) {
+    return (
+      <Suspense
+        fallback={
+          <div
+            className="flex min-h-dvh items-center justify-center gap-3 bg-background p-6 text-sm font-semibold text-muted-foreground"
+            dir="rtl"
+            lang="ar"
+            role="status"
+          >
+            <Loader2 className="size-4 animate-spin text-primary" />
+            جارٍ تحميل لوحة المراقبة...
+          </div>
+        }
+      >
+        <DashboardApp />
+      </Suspense>
+    )
+  }
 
   async function onLogin(event: React.FormEvent) {
     event.preventDefault()
@@ -213,6 +232,8 @@ export default function AuthGate() {
                   <User className="pointer-events-none absolute start-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="login-username"
+                    name="username"
+                    type="text"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
                     placeholder="اسم المستخدم"
@@ -232,6 +253,7 @@ export default function AuthGate() {
                   <Lock className="pointer-events-none absolute start-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="login-password"
+                    name="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     placeholder="كلمة المرور"

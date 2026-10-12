@@ -4,6 +4,8 @@
 
 Nexora runs as a self-contained on-premise installation, connects to existing cameras (**RTSP / IP cameras, Webcams, or Video Files**), runs real-time AI detection using dedicated **Ultralytics YOLO** models per sector, and serves an Arabic RTL React dashboard with annotated video and WebSocket telemetry. Alerts are stored locally by default; optional SMTP/HTTP integrations are customer-configured and not required for operation.
 
+For a careful analysis of the browser console messages, bundled model metadata/metrics, and low-latency configuration, see [docs/CONSOLE_AND_MODEL_REVIEW_AR.md](docs/CONSOLE_AND_MODEL_REVIEW_AR.md).
+
 ![Nexora Dashboard](Visuals/ppe-public-view.png)
 
 ---
@@ -164,6 +166,7 @@ Bare-metal deployments must meet the same requirements as Compose: explicit rand
 | `BACKUP_ENCRYPTION_KEY` | Empty | Explicit URL-safe 256-bit key required in production for AES-GCM database backups |
 | `CONSTRUCTION_MODEL_PATH` | `Model/ppe.pt` | Path to YOLO weights for construction cameras |
 | `MEDICAL_MODEL_PATH` | `Model/bestMedicalModel.pt` | Path to YOLO weights for medical cameras |
+| `CAMERA_CAPTURE_BUFFER_SIZE` | `1` | Best-effort OpenCV buffer depth for live webcam/RTSP sources; `1` favors fresh frames over stale queued frames |
 | `HYBRID_DETECTION_ENABLED` | `true` | Fuse the construction + medical models in one `HybridPPEDetector` per camera profile |
 | `HYBRID_CONSTRUCTION_ON_MEDICAL` | `true` | Run the construction model alongside medical cameras (adds `Person` + association) |
 | `HYBRID_MEDICAL_ON_CONSTRUCTION` | `false` | Run the medical model alongside construction cameras (mask/goggle verification, heavier) |

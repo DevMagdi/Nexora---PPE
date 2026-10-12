@@ -92,17 +92,49 @@ export function cameraProfile(c: { profile?: string } | null | undefined): Camer
   return c?.profile === "medical" ? "medical" : "construction"
 }
 
-export function isCoreType(type: string): boolean {
-  return CORE_KEYWORDS.some((k) => type.toLowerCase().includes(k))
+export function isCoreType(type: unknown): boolean {
+  const value = typeof type === "string" ? type.toLowerCase() : ""
+  return CORE_KEYWORDS.some((keyword) => value.includes(keyword))
 }
 
-export function normalizeViolationKey(type: string): string {
-  return type.toLowerCase().replace(/[^a-z]/g, "")
+export function normalizeViolationKey(type: unknown): string {
+  const value = typeof type === "string" ? type : ""
+  return value.toLowerCase().replace(/[^a-z]/g, "")
 }
 
-export function violationLabel(type: string, ppeLabels: Map<string, string>): string {
-  const key = normalizeViolationKey(type)
-  return VIOLATION_LABELS[key] ?? ppeLabels.get(type) ?? type.replace(/[_-]+/g, " ")
+export function violationLabel(type: unknown, ppeLabels: ReadonlyMap<string, string>): string {
+  const value = typeof type === "string" ? type.trim() : ""
+  const key = normalizeViolationKey(value)
+  return (
+    VIOLATION_LABELS[key]
+    ?? (ppeLabels.get(value)?.trim() || value.replace(/[_-]+/g, " ") || "غير محدد")
+  )
+}
+
+/**
+ * Aggregate chart entries by their displayed label, not the model's raw class name.
+ * Construction and medical models use different spellings for the same PPE class
+ * (for example `NO-Mask` and `no mask`), which otherwise creates duplicate React keys
+ * and visually splits a single violation across multiple pie slices.
+ */
+export function aggregateViolationPieData(
+  violations: readonly ({ violation_type?: unknown } | null | undefined)[] | null | undefined,
+  ppeLabels: ReadonlyMap<string, string>,
+  limit = 5,
+): { name: string; value: number }[] {
+  const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 5
+  if (safeLimit === 0) return []
+
+  const counts = new Map<string, number>()
+  for (const violation of violations ?? []) {
+    const name = violationLabel(violation?.violation_type, ppeLabels)
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+
+  return [...counts.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .slice(0, safeLimit)
 }
 
 /**

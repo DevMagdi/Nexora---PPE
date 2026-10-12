@@ -27,6 +27,7 @@ import { useLiveCameraSocket, useMediaQuery, useTheme } from "@/hooks/useUiHooks
 import AppShell from "@/layout/AppShell"
 import { downloadViolationsCsv, logout, refreshMediaSession, resolveFrameUrl } from "@/lib/api"
 import {
+  aggregateViolationPieData,
   cameraProfile,
   computeCompliance,
   DAY,
@@ -42,7 +43,6 @@ import {
   TAB_TITLES,
   TABLE_PAGE_SIZE,
   VIOLATIONS_FETCH_LIMIT,
-  violationLabel,
 } from "@/lib/formatters"
 import { getErrorMessage } from "@/lib/utils"
 import Toast from "@/shared/Toast"
@@ -385,14 +385,10 @@ export default function App() {
     return arr
   }, [overviewList, from, range])
 
-  const pieData = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const v of overviewList) m.set(v.violation_type, (m.get(v.violation_type) ?? 0) + 1)
-    return [...m.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([type, value]) => ({ name: violationLabel(type, ppeLabels), value }))
-  }, [overviewList, ppeLabels])
+  const pieData = useMemo(
+    () => aggregateViolationPieData(overviewList, ppeLabels),
+    [overviewList, ppeLabels],
+  )
 
   const activeProfile = selectedCamera
     ? cameraProfile(selectedCamera)

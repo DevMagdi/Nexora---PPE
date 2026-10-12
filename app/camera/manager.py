@@ -53,6 +53,8 @@ class _CameraEntry:
     latest_counts: dict = field(default_factory=dict)
     alert_sent_until: float = 0.0
     last_det_log: float = 0.0
+    last_inference_ms: float = 0.0
+    last_processing_ms: float = 0.0
 
 
 class CameraManager:
@@ -447,6 +449,7 @@ class CameraManager:
 
         try:
             while True:
+                cycle_started = time.perf_counter()
                 frame = await entry.source.read_frame()
                 if frame is None:
                     entry.consecutive_read_failures += 1
@@ -472,24 +475,10 @@ class CameraManager:
                     )
                     entry.consecutive_read_failures = 0
 
+                inference_started = time.perf_counter()
                 detections = await loop.run_in_executor(None, detector.detect, frame)
+                entry.last_inference_ms = (time.perf_counter() - inference_started) * 1000
                 entry.latest_counts = self._compute_counts(entry.profile, detections)
-
-                now_ts = time.time()
-                if now_ts - entry.last_det_log >= 5:
-                    entry.last_det_log = now_ts
-                    sample = [
-                        (d.class_name, round(d.confidence, 2), d.source)
-                        for d in detections[:8]
-                    ]
-                    hybrid_stats = getattr(detector, "last_stats", None)
-                    logger.info(
-                        "cam=%d profile=%s dets=%s hybrid=%s",
-                        camera_id,
-                        entry.profile,
-                        sample,
-                        hybrid_stats.as_dict() if hybrid_stats else "n/a",
-                    )
 
                 violations = checker.check(
                     camera_id, detections, enabled_classes=entry.enabled_classes
@@ -525,6 +514,29 @@ class CameraManager:
                     )
 
                 await self._broadcast(camera_id, entry.latest_counts)
+                entry.last_processing_ms = (time.perf_counter() - cycle_started) * 1000
+
+                now_ts = time.time()
+                if now_ts - entry.last_det_log >= 5:
+                    entry.last_det_log = now_ts
+                    sample = [
+                        (d.class_name, round(d.confidence, 2), d.source)
+                        for d in detections[:8]
+                    ]
+                    hybrid_stats = getattr(detector, "last_stats", None)
+                    cycle_fps = 1000 / max(entry.last_processing_ms, 1)
+                    logger.info(
+                        "cam=%d profile=%s dets=%s hybrid=%s inference_ms=%.1f "
+                        "cycle_ms=%.1f cycle_fps=%.1f",
+                        camera_id,
+                        entry.profile,
+                        sample,
+                        hybrid_stats.as_dict() if hybrid_stats else "n/a",
+                        entry.last_inference_ms,
+                        entry.last_processing_ms,
+                        cycle_fps,
+                    )
+
                 await asyncio.sleep(0)
 
         except asyncio.CancelledError:

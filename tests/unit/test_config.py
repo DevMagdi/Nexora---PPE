@@ -10,6 +10,7 @@ def test_defaults():
     assert s.APP_ENV == "dev"
     assert s.CONSTRUCTION_MODEL_PATH == "Model/ppe.pt"
     assert s.MEDICAL_MODEL_PATH == "Model/bestMedicalModel.pt"
+    assert s.CAMERA_CAPTURE_BUFFER_SIZE == 1
     # الافتراضيات اترفعت لحارس الدقة (precision floor) — كانت 0.10/0.15
     assert s.CONSTRUCTION_DETECTION_CONFIDENCE == pytest.approx(0.25)
     assert s.MEDICAL_DETECTION_CONFIDENCE == pytest.approx(0.25)
@@ -84,3 +85,8 @@ def test_parse_class_thresholds():
 def test_database_url_default():
     s = Settings(_env_file=None)
     assert "sqlite" in s.DATABASE_URL
+
+
+def test_live_capture_buffer_depth_must_be_positive():
+    with pytest.raises(ValueError, match="CAMERA_CAPTURE_BUFFER_SIZE must be at least 1"):
+        Settings(_env_file=None, CAMERA_CAPTURE_BUFFER_SIZE=0)

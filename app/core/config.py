@@ -140,6 +140,8 @@ class Settings(BaseSettings):
     # Camera loop timing
     FRAME_READ_RETRY_DELAY_SECONDS: float = 0.05
     STREAM_FPS_DELAY_SECONDS: float = 0.04
+    # Best-effort OpenCV queue depth for live webcam/RTSP sources; 1 favors freshness.
+    CAMERA_CAPTURE_BUFFER_SIZE: int = 1
     CAMERA_FIRST_FRAME_TIMEOUT_SECONDS: float = 10.0
     CAMERA_FRAME_STALE_SECONDS: float = 15.0
 
@@ -171,6 +173,8 @@ class Settings(BaseSettings):
             raise ValueError("DB_MIGRATION_LOCK_TIMEOUT_MS must be positive")
         if self.CAMERA_FIRST_FRAME_TIMEOUT_SECONDS <= 0 or self.CAMERA_FRAME_STALE_SECONDS <= 0:
             raise ValueError("Camera frame timeout settings must be positive")
+        if self.CAMERA_CAPTURE_BUFFER_SIZE < 1:
+            raise ValueError("CAMERA_CAPTURE_BUFFER_SIZE must be at least 1")
 
         # A short JWT secret triggers PyJWT's InsecureKeyLengthWarning at login
         # time and makes session/media tokens forgeable, so reject it in every
