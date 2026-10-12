@@ -56,30 +56,52 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         sector=settings.BOOTSTRAP_SECTOR,
     )
 
-    # Load detectors (two models)
+    # Load detectors (construction + medical YOLO weights)
     from app.core.detector import PPEDetector
+    from app.core.hybrid_detector import HybridPPEDetector
 
-    app.state.detectors = {
-        "construction": PPEDetector(
-            settings.CONSTRUCTION_MODEL_PATH,
-            settings.CONSTRUCTION_DETECTION_CONFIDENCE,
-            settings.CONSTRUCTION_DEFAULT_CLASS_CONF,
-            settings.CONSTRUCTION_CLASS_CONF_THRESHOLDS,
-            fallbacks=("Model/ppe.pt", "Model/ppe_construction.pt"),
+    construction_detector = PPEDetector(
+        settings.CONSTRUCTION_MODEL_PATH,
+        settings.CONSTRUCTION_DETECTION_CONFIDENCE,
+        settings.CONSTRUCTION_DEFAULT_CLASS_CONF,
+        settings.CONSTRUCTION_CLASS_CONF_THRESHOLDS,
+        fallbacks=("Model/ppe.pt", "Model/ppe_construction.pt"),
+    )
+    medical_detector = PPEDetector(
+        settings.MEDICAL_MODEL_PATH,
+        settings.MEDICAL_DETECTION_CONFIDENCE,
+        settings.MEDICAL_DEFAULT_CLASS_CONF,
+        settings.MEDICAL_CLASS_CONF_THRESHOLDS,
+        fallbacks=(
+            "Model/bestMedicalModel2.pt",
+            "Model/ppe_medical.pt",
         ),
-        "medical": PPEDetector(
-            settings.MEDICAL_MODEL_PATH,
-            settings.MEDICAL_DETECTION_CONFIDENCE,
-            settings.MEDICAL_DEFAULT_CLASS_CONF,
-            settings.MEDICAL_CLASS_CONF_THRESHOLDS,
-            fallbacks=(
-                "Model/bestMedicalModel2.pt",
-                "Model/bestMedicalModel.pt",
-                "Model/ppe_medical.pt",
+    )
+
+    if settings.HYBRID_DETECTION_ENABLED:
+        # كل بروفايل بياخد نسخة هجين بنفس الأوزان: الموديل الأساسي للبروفايل
+        # + الموديل التاني كمساعد + فلتر الجلد (skin ratio / distanceTransform / eye bridge)
+        app.state.detectors = {
+            "construction": HybridPPEDetector(
+                construction_detector,
+                medical_detector,
+                primary_profile="construction",
             ),
-        ),
-    }
-    logger.info("Detectors loaded (construction+medical)")
+            "medical": HybridPPEDetector(
+                construction_detector,
+                medical_detector,
+                primary_profile="medical",
+            ),
+        }
+        app.state.hybrid_enabled = True
+        logger.info("Hybrid detectors loaded (medical + construction + skin heuristics)")
+    else:
+        app.state.detectors = {
+            "construction": construction_detector,
+            "medical": medical_detector,
+        }
+        app.state.hybrid_enabled = False
+        logger.info("Detectors loaded (construction+medical), hybrid mode disabled")
 
     # Start camera manager
     from app.camera.manager import CameraManager

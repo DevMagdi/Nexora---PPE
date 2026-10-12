@@ -9,10 +9,33 @@ def test_defaults():
     s = Settings(_env_file=None)
     assert s.APP_ENV == "dev"
     assert s.CONSTRUCTION_MODEL_PATH == "Model/ppe.pt"
-    assert s.MEDICAL_MODEL_PATH == "Model/bestMedicalModel2.pt"
+    assert s.MEDICAL_MODEL_PATH == "Model/bestMedicalModel.pt"
     assert s.CONSTRUCTION_DETECTION_CONFIDENCE == pytest.approx(0.10)
     assert s.MEDICAL_DETECTION_CONFIDENCE == pytest.approx(0.15)
     assert s.ALERT_COOLDOWN_SECONDS == 60
+
+
+def test_hybrid_and_skin_defaults():
+    s = Settings(_env_file=None)
+    assert s.HYBRID_DETECTION_ENABLED is True
+    assert s.HYBRID_CONSTRUCTION_ON_MEDICAL is True
+    assert s.HYBRID_MEDICAL_ON_CONSTRUCTION is False
+    assert s.SKIN_FILTER_ENABLED is True
+    assert s.SKIN_BARE_HAND_ENABLED is True
+    assert s.SKIN_EYE_BRIDGE_ENABLED is True
+    assert 0.0 < s.SKIN_MIN_RATIO < s.SKIN_STRONG_RATIO < 1.0
+    assert s.SKIN_BARE_HAND_MIN_THICKNESS == pytest.approx(0.12)
+    assert s.SKIN_EYE_BRIDGE_MIN_SKIN_RATIO == pytest.approx(0.22)
+
+
+def test_hybrid_can_be_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("HYBRID_DETECTION_ENABLED", "false")
+    monkeypatch.setenv("SKIN_FILTER_ENABLED", "false")
+    monkeypatch.setenv("MEDICAL_MODEL_PATH", "Model/custom.pt")
+    s = Settings(_env_file=None)
+    assert s.HYBRID_DETECTION_ENABLED is False
+    assert s.SKIN_FILTER_ENABLED is False
+    assert s.MEDICAL_MODEL_PATH == "Model/custom.pt"
 
 
 def test_env_override(monkeypatch):

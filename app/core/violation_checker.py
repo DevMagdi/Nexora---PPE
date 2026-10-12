@@ -5,7 +5,12 @@ from dataclasses import dataclass, field
 
 from app.core.detector import Detection
 from app.core.logging import get_logger
-from app.core.ppe import PPE_CLASS_MAPS, Profile, sanitize_enabled_classes
+from app.core.ppe import (
+    PPE_CLASS_MAPS,
+    Profile,
+    canonical_class_name,
+    sanitize_enabled_classes,
+)
 
 logger = get_logger(__name__)
 
@@ -41,7 +46,14 @@ class _PPEState:
 
 
 def _norm_name(s: str) -> str:
-    return (s or "").strip().lower()
+    """
+    مفتاح موحّد لأسماء الفئات.
+
+    النظام الهجين بيخلط أسماء الموديل الطبي (`no goggle`) مع الأسماء الإنشائية
+    (`NO-Goggles`) ومع الكشوف المولّدة من فلتر الجلد، فالمقارنة بقت على الصيغة
+    الموحّدة بدل مجرد lowercase.
+    """
+    return canonical_class_name(s).lower()
 
 
 @dataclass
@@ -52,6 +64,24 @@ class _CameraState:
         if ppe_key not in self.ppe_states:
             self.ppe_states[ppe_key] = _PPEState()
         return self.ppe_states[ppe_key]
+
+
+_MEDICAL_CONTEXT_NAMES: set[str] = {"person"} | {
+    _norm_name(str(cfg[key]))
+    for cfg in PPE_CLASS_MAPS["medical"].values()
+    for key in ("positive", "negative")
+    if cfg.get(key)
+}
+
+
+def _has_medical_context(detections: list[Detection]) -> bool:
+    """
+    فيه سياق طبي في الكادر؟
+
+    الشخص ممكن يجي من الموديل الإنشائي (النظام الهجين)، والقطع الطبية من
+    الموديل الطبي — الاتنين يعتبروا دليل على وجود طاقم في الكادر.
+    """
+    return any(_norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES for d in detections)
 
 
 def _overlap_ratio(inner: Detection, outer: Detection) -> float:
@@ -70,8 +100,9 @@ def _assign_ppe_to_persons(
     persons: list[Detection],
     ppe_items: list[Detection],
     min_overlap: float = MIN_PERSON_OVERLAP,
-) -> dict[int, set[str]]:
-    assignment: dict[int, set[str]] = {i: set() for i in range(len(persons))}
+) -> dict[int, list[Detection]]:
+    """يربط كل قطعة PPE بأقرب شخص (IoU على مستطيل الشخص)."""
+    assignment: dict[int, list[Detection]] = {i: [] for i in range(len(persons))}
     for item in ppe_items:
         best_idx = -1
         best_ratio = 0.0
@@ -81,8 +112,12 @@ def _assign_ppe_to_persons(
                 best_ratio = ratio
                 best_idx = i
         if best_idx >= 0 and best_ratio >= min_overlap:
-            assignment[best_idx].add(item.class_name)
+            assignment[best_idx].append(item)
     return assignment
+
+
+def _assigned_names(items: list[Detection]) -> set[str]:
+    return {_norm_name(item.class_name) for item in items}
 
 
 class BaseViolationChecker:
@@ -151,13 +186,23 @@ class ConstructionViolationChecker(BaseViolationChecker):
 
             missing_confidences: list[float] = []
             for i, person in enumerate(persons):
-                assigned_names = assignment[i]
-                has_positive = bool(positive) and positive in assigned_names
-                has_negative = bool(negative) and negative in assigned_names
+                assigned = assignment[i]
+                assigned_names = _assigned_names(assigned)
+                has_positive = bool(positive) and _norm_name(positive) in assigned_names
+                has_negative = bool(negative) and _norm_name(negative) in assigned_names
 
                 is_missing = bool(has_negative or (positive and not has_positive))
                 if is_missing:
-                    missing_confidences.append(person.confidence)
+                    # لو فيه كشف سالب صريح (من الموديل أو من فلتر الجلد/جسر العينين)
+                    # ثقته أدق من ثقة مستطيل الشخص
+                    explicit_negatives = [
+                        d.confidence
+                        for d in assigned
+                        if negative and _norm_name(d.class_name) == _norm_name(negative)
+                    ]
+                    missing_confidences.append(
+                        max(explicit_negatives) if explicit_negatives else person.confidence
+                    )
 
             missing_count = len(missing_confidences)
 
@@ -235,6 +280,7 @@ class MedicalViolationChecker(BaseViolationChecker):
         )
 
         violations: list[ViolationEvent] = []
+        medical_context = _has_medical_context(detections)
         for ppe_key in enabled_sorted:
             cfg = cfg_map.get(ppe_key)
             if not cfg:
@@ -254,9 +300,13 @@ class MedicalViolationChecker(BaseViolationChecker):
             elif positive:
                 pos_key = _norm_name(positive)
                 has_positive = any(_norm_name(d.class_name) == pos_key for d in detections)
-                # لا نعتبر الفئة الموجبة غائبة إلا إذا كان هناك كشف لأشخاص/عناصر أخرى بالكادر
-                is_violating = len(detections) > 0 and not has_positive
-                confidence = max((d.confidence for d in detections), default=0.0)
+                # لا نعتبر الفئة الموجبة غائبة إلا لو فيه سياق طبي بالكادر
+                # (شخص من الموديل الإنشائي أو أي قطعة طبية) — مش أي كشف عشوائي
+                is_violating = medical_context and not has_positive
+                confidence = max(
+                    (d.confidence for d in detections if _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES),
+                    default=0.0,
+                )
                 violation_type = f"no {label}"
             else:
                 continue

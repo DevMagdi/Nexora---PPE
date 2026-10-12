@@ -2,6 +2,12 @@
 # For the full production API server with multi-camera support, web dashboard,
 # violation logging, and Docker deployment, see the app/ directory.
 # Run the API with:  uvicorn app.main:app --reload
+#
+# This legacy script still runs a single model. The smart hybrid detector
+# (Medical + Construction fusion + skin filter `calc_skin_ratio` +
+# `distanceTransform` bare-hand test + eye-bridge NO-Goggles) lives in
+# app/core/hybrid_detector.py and app/core/skin_analysis.py and is used by the
+# API/camera-manager pipeline.
 import os
 from dotenv import load_dotenv
 import cv2

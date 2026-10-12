@@ -50,6 +50,8 @@ export interface ViolationListResponse {
 export interface HealthResponse {
   status: string
   detectors_loaded: boolean
+  /** النظام الهجين (Medical + Construction + فلتر الجلد) شغال؟ */
+  hybrid_detection?: boolean
   cameras_active: number
   /** @deprecated الباك بقى detectors_loaded */
   model_loaded?: boolean

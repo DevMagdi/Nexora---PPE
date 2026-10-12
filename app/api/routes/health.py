@@ -17,14 +17,17 @@ async def health(request: Request):
             getattr(request.app.state, "detectors", None)
             or getattr(request.app.state, "detector", None)
         )
+        hybrid_enabled = bool(getattr(request.app.state, "hybrid_enabled", False))
     except Exception:
         active = 0
         detectors_loaded = False
+        hybrid_enabled = False
 
     return {
         "status": "ok",
         "detectors_loaded": detectors_loaded,
         "model_loaded": detectors_loaded,
+        "hybrid_detection": hybrid_enabled,
         "cameras_active": active,
     }
 

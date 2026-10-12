@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from app.core.detector import Detection
+from app.core.detector import Detection, is_skin_source
 
 
 def draw_text_with_background(
@@ -45,6 +45,10 @@ def annotate_frame(
     for det in detections:
         cv2.rectangle(annotated, (det.x1, det.y1), (det.x2, det.y2), det.color, 2)
         label = f"{det.class_name} ({det.confidence:.2f})"
+        if is_skin_source(getattr(det, "source", None)):
+            # كشف مؤكَّد/مولَّد من فلتر الجلد أو جسر العينين
+            label = f"{label} [skin]"
+
         draw_text_with_background(
             annotated,
             label,
