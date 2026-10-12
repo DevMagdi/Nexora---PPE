@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import AddCameraForm from "@/cameras/AddCameraForm"
 import CameraGrid from "@/cameras/CameraGrid"
 import ConfirmDialog from "@/components/ConfirmDialog"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import ChartsSection from "@/dashboard/ChartsSection"
 import HeroStrip from "@/dashboard/HeroStrip"
 import LiveViewSection from "@/dashboard/LiveStage"
@@ -40,7 +46,14 @@ import {
 } from "@/lib/formatters"
 import { getErrorMessage } from "@/lib/utils"
 import Toast from "@/shared/Toast"
-import type { Camera, RangeKey, TabKey, ToastState, Violation } from "@/types"
+import type {
+  Camera,
+  RangeKey,
+  TabKey,
+  ToastState,
+  Violation,
+  ViolationStatusFilter,
+} from "@/types"
 import ViolationsTable from "@/violations/ViolationsTable"
 
 export default function App() {
@@ -48,8 +61,18 @@ export default function App() {
   const [dark, setDark] = useTheme()
 
   const { data: meUser } = useMe()
-  const { data: health, isLoading: healthLoading, isError: healthError, refetch: refetchHealth } = useHealth()
-  const { data: cameras, isLoading: camerasLoading, isError: camerasError, refetch: refetchCameras } = useCameras()
+  const {
+    data: health,
+    isLoading: healthLoading,
+    isError: healthError,
+    refetch: refetchHealth,
+  } = useHealth()
+  const {
+    data: cameras,
+    isLoading: camerasLoading,
+    isError: camerasError,
+    refetch: refetchCameras,
+  } = useCameras()
   const { data: ppeMetaC } = usePPEClassesMeta("construction")
   const { data: ppeMetaM } = usePPEClassesMeta("medical")
 
@@ -64,6 +87,7 @@ export default function App() {
   const [selectedCameraId, setSelectedCameraId] = useState<number | null>(null)
   const [frameUrl, setFrameUrl] = useState<string | null>(null)
   const [showAllTypes, setShowAllTypes] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<ViolationStatusFilter>("all")
   const [cameraSearch, setCameraSearch] = useState("")
   const [typeInput, setTypeInput] = useState("")
   const [typeFilter, setTypeFilter] = useState("")
@@ -90,6 +114,7 @@ export default function App() {
     ? `${ROLE_LABEL[meUser.role] ?? meUser.role} · ${SECTOR_LABEL[meUser.sector] ?? "حساب محلي"}`
     : "حساب محلي"
   const canOperate = meUser?.role === "admin" || meUser?.role === "operator"
+  const serverOk = health?.status === "ok" && !healthError
 
   useEffect(() => {
     if (!meUserId || mustChangePassword) return
@@ -127,7 +152,7 @@ export default function App() {
     const t = setTimeout(() => {
       setTypeFilter(typeInput.trim())
       setPage(1)
-    }, 350)
+    }, 300)
     return () => clearTimeout(t)
   }, [typeInput])
 
@@ -256,6 +281,7 @@ export default function App() {
 
   const {
     data: overviewData,
+    isLoading: overviewLoading,
     isError: overviewError,
     refetch: refetchOverview,
   } = useViolations(baseParams)
@@ -278,15 +304,32 @@ export default function App() {
     () => overviewList.filter((v) => isCoreType(v.violation_type)).length,
     [overviewList],
   )
+  const openViolationsCount = useMemo(
+    () => overviewList.filter((v) => !v.is_resolved).length,
+    [overviewList],
+  )
   const overviewCapped = overviewList.length >= VIOLATIONS_FETCH_LIMIT
 
-  const filteredList = useMemo(
+  const typeFilteredList = useMemo(
     () =>
       (violationsData?.items ?? [])
         .filter((v) => showAllTypes || isCoreType(v.violation_type))
         .sort(byNewest),
     [violationsData, showAllTypes],
   )
+
+  const statusCounts = useMemo(() => {
+    const open = typeFilteredList.filter((v) => !v.is_resolved).length
+    const resolved = typeFilteredList.length - open
+    return { all: typeFilteredList.length, open, resolved }
+  }, [typeFilteredList])
+
+  const filteredList = useMemo(() => {
+    if (statusFilter === "open") return typeFilteredList.filter((v) => !v.is_resolved)
+    if (statusFilter === "resolved") return typeFilteredList.filter((v) => v.is_resolved)
+    return typeFilteredList
+  }, [typeFilteredList, statusFilter])
+
   const pageCount = Math.max(1, Math.ceil(filteredList.length / TABLE_PAGE_SIZE))
   const safePage = Math.min(page, pageCount)
   const pageItems = filteredList.slice(
@@ -481,10 +524,14 @@ export default function App() {
           onOpenFrame: openFrame,
           onGoViolations: () => setTab("violations"),
           displayName,
+          displayRole,
+          serverOk,
+          runningCount,
+          onLogout: handleLogout,
         }}
       >
         {tab === "overview" && (
-          <div className="mx-auto max-w-7xl space-y-12">
+          <div className="mx-auto max-w-7xl space-y-8 lg:space-y-10">
             <HeroStrip
               headline={headline}
               rangeLabel={rangeLabel}
@@ -496,14 +543,23 @@ export default function App() {
               selectedCamera={selectedCamera}
               activeCounts={activeCounts}
               hasOverviewRaw={Boolean(overviewData)}
+              overviewLoading={overviewLoading}
               overviewCount={overviewList.length}
               overviewCapped={overviewCapped}
               coreCount={coreCount}
+              openViolationsCount={openViolationsCount}
+              lastViolation={overviewList[0] ?? null}
+              now={now}
               camerasLoading={camerasLoading}
               totalCams={totalCams}
               runningCount={runningCount}
               hourAlerts={hourAlerts}
               alertsCameraCount={alertsByCam.size}
+              onGoLive={() => setTab("live")}
+              onGoViolations={() => {
+                setStatusFilter("open")
+                setTab("violations")
+              }}
             />
             <ChartsSection
               range={range}
@@ -513,12 +569,16 @@ export default function App() {
               pieData={pieData}
               overviewList={overviewList}
               overviewCapped={overviewCapped}
+              overviewLoading={overviewLoading}
               overviewError={overviewError}
               hasOverviewRaw={Boolean(overviewData)}
               onRetryOverview={() => void refetchOverview()}
               ppeLabels={ppeLabels}
               cameraName={cameraName}
               now={now}
+              canOperate={canOperate}
+              resolvingViolationId={resolvingViolationId}
+              onResolveViolation={resolveViolation}
               onOpenFrame={openFrame}
               onGoViolations={() => setTab("violations")}
             />
@@ -594,6 +654,12 @@ export default function App() {
             }}
             typeInput={typeInput}
             onTypeInputChange={setTypeInput}
+            statusFilter={statusFilter}
+            onStatusFilterChange={(next) => {
+              setStatusFilter(next)
+              setPage(1)
+            }}
+            statusCounts={statusCounts}
             knownTypes={knownTypes}
             ppeLabels={ppeLabels}
             showAllTypes={showAllTypes}
@@ -614,6 +680,7 @@ export default function App() {
             pageCount={pageCount}
             onPageChange={setPage}
             cameraName={cameraName}
+            now={now}
             canOperate={canOperate}
             resolvingViolationId={resolvingViolationId}
             onOpenFrame={openFrame}

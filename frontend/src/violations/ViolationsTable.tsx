@@ -6,8 +6,8 @@ import EmptyState from "@/shared/EmptyState"
 import ErrorState from "@/shared/ErrorState"
 import SkeletonBlock from "@/shared/SkeletonBlock"
 import ViolationFilters from "@/violations/ViolationFilters"
-import ViolationRow from "@/violations/ViolationRow"
-import type { Camera, Violation } from "@/types"
+import ViolationRow, { ViolationMobileCard } from "@/violations/ViolationRow"
+import type { Camera, Violation, ViolationStatusFilter } from "@/types"
 
 interface ViolationsTableProps {
   rangeLabel: string
@@ -17,6 +17,9 @@ interface ViolationsTableProps {
   onCamFilterChange: (next: number | "all") => void
   typeInput: string
   onTypeInputChange: (next: string) => void
+  statusFilter: ViolationStatusFilter
+  onStatusFilterChange: (next: ViolationStatusFilter) => void
+  statusCounts: { all: number; open: number; resolved: number }
   knownTypes: string[]
   ppeLabels: Map<string, string>
   showAllTypes: boolean
@@ -34,6 +37,7 @@ interface ViolationsTableProps {
   pageCount: number
   onPageChange: (nextPage: number) => void
   cameraName: (id: number) => string
+  now: number
   canOperate: boolean
   resolvingViolationId: number | null
   onOpenFrame: (url?: string | null) => void
@@ -48,6 +52,9 @@ export default function ViolationsTable({
   onCamFilterChange,
   typeInput,
   onTypeInputChange,
+  statusFilter,
+  onStatusFilterChange,
+  statusCounts,
   knownTypes,
   ppeLabels,
   showAllTypes,
@@ -65,6 +72,7 @@ export default function ViolationsTable({
   pageCount,
   onPageChange,
   cameraName,
+  now,
   canOperate,
   resolvingViolationId,
   onOpenFrame,
@@ -80,6 +88,9 @@ export default function ViolationsTable({
         onCamFilterChange={onCamFilterChange}
         typeInput={typeInput}
         onTypeInputChange={onTypeInputChange}
+        statusFilter={statusFilter}
+        onStatusFilterChange={onStatusFilterChange}
+        statusCounts={statusCounts}
         knownTypes={knownTypes}
         ppeLabels={ppeLabels}
         showAllTypes={showAllTypes}
@@ -88,13 +99,58 @@ export default function ViolationsTable({
         onExport={onExport}
       />
 
-      <Card className="overflow-hidden">
+      {/* ─── Mobile Cards View (< 768px) ─── */}
+      <div className="space-y-3 md:hidden">
+        {violationsError && !hasViolationsRaw && (
+          <ErrorState compact title="تعذّر تحميل المخالفات" onRetry={onRetryViolations} />
+        )}
+        {loadingV && !hasViolationsRaw && !violationsError && (
+          <div className="space-y-3">
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className="card-premium space-y-3 border border-border/60 p-4">
+                <div className="flex items-center gap-3">
+                  <SkeletonBlock className="size-16 rounded-xl" />
+                  <div className="flex-1 space-y-2">
+                    <SkeletonBlock className="h-4 w-32 rounded" />
+                    <SkeletonBlock className="h-3 w-24 rounded" />
+                  </div>
+                </div>
+                <SkeletonBlock className="h-10 w-full rounded-xl" />
+              </div>
+            ))}
+          </div>
+        )}
+        {!loadingV && !violationsError && filteredList.length === 0 && (
+          <EmptyState
+            compact
+            icon={<ShieldCheck className="size-6 text-success" />}
+            title="لا توجد نتائج مطابقة"
+            desc="جرّب تغيير الفلاتر أو توسيع النطاق الزمني."
+          />
+        )}
+        {pageItems.map((v) => (
+          <ViolationMobileCard
+            key={v.id}
+            violation={v}
+            ppeLabels={ppeLabels}
+            cameraName={cameraName(v.camera_id)}
+            now={now}
+            canOperate={canOperate}
+            resolvePending={resolvingViolationId === v.id}
+            onOpenFrame={onOpenFrame}
+            onResolve={onResolveViolation}
+          />
+        ))}
+      </div>
+
+      {/* ─── Desktop Table View (>= 768px) ─── */}
+      <Card className="hidden overflow-hidden md:block">
         <div className="overflow-x-auto">
           <table className="w-full whitespace-nowrap text-start text-sm">
-            <thead className="border-b border-border bg-muted/60 text-xs font-semibold text-muted-foreground">
+            <thead className="border-b border-border bg-muted/60 text-xs font-bold text-muted-foreground">
               <tr>
                 <th className="p-4 text-start">الدليل المرئي</th>
-                <th className="p-4 text-start">التاريخ والوقت</th>
+                <th className="p-4 text-start">التوقيت</th>
                 <th className="p-4 text-start">نوع المخالفة</th>
                 <th className="p-4 text-start">الكاميرا</th>
                 <th className="p-4 text-start">ثقة الكشف</th>
@@ -123,7 +179,7 @@ export default function ViolationsTable({
                     <tr key={i}>
                       <td colSpan={7} className="p-4">
                         <div className="flex items-center gap-4">
-                          <SkeletonBlock className="h-10 w-14 rounded-xl" />
+                          <SkeletonBlock className="h-11 w-16 rounded-xl" />
                           <div className="flex-1 space-y-2">
                             <SkeletonBlock className="h-4 w-48 rounded" />
                             <SkeletonBlock className="h-3 w-24 rounded" />
@@ -154,6 +210,7 @@ export default function ViolationsTable({
                   violation={v}
                   ppeLabels={ppeLabels}
                   cameraName={cameraName(v.camera_id)}
+                  now={now}
                   canOperate={canOperate}
                   resolvePending={resolvingViolationId === v.id}
                   onOpenFrame={onOpenFrame}
@@ -163,43 +220,44 @@ export default function ViolationsTable({
             </tbody>
           </table>
         </div>
+      </Card>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 bg-muted/15 p-4 text-xs text-muted-foreground">
-          <span className="tabular-nums">
-            {filteredList.length === 0
-              ? "لا توجد سجلات"
-              : `عرض ${(safePage - 1) * TABLE_PAGE_SIZE + 1} إلى ${Math.min(
-                  safePage * TABLE_PAGE_SIZE,
-                  filteredList.length,
-                )} من ${filteredList.length}${
-                  rawItemsCount >= VIOLATIONS_FETCH_LIMIT ? "+" : ""
-                } سجل`}
+      {/* ─── Pagination Footer ─── */}
+      <Card className="flex flex-wrap items-center justify-between gap-3 p-4 text-xs text-muted-foreground">
+        <span className="tabular-nums font-medium">
+          {filteredList.length === 0
+            ? "لا توجد سجلات"
+            : `عرض ${(safePage - 1) * TABLE_PAGE_SIZE + 1} إلى ${Math.min(
+                safePage * TABLE_PAGE_SIZE,
+                filteredList.length,
+              )} من ${filteredList.length}${
+                rawItemsCount >= VIOLATIONS_FETCH_LIMIT ? "+" : ""
+              } سجل`}
+        </span>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-h-9 rounded-xl px-3 text-xs font-semibold"
+            disabled={safePage <= 1}
+            onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          >
+            السابق
+          </Button>
+          <span className="px-2 font-bold tabular-nums text-foreground">
+            صفحة {safePage} من {pageCount}
           </span>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 rounded-lg text-[11px]"
-              disabled={safePage <= 1}
-              onClick={() => onPageChange(Math.max(1, safePage - 1))}
-            >
-              السابق
-            </Button>
-            <span className="tabular-nums">
-              صفحة {safePage} من {pageCount}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 rounded-lg text-[11px]"
-              disabled={safePage >= pageCount}
-              onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
-            >
-              التالي
-            </Button>
-          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="min-h-9 rounded-xl px-3 text-xs font-semibold"
+            disabled={safePage >= pageCount}
+            onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          >
+            التالي
+          </Button>
         </div>
       </Card>
     </div>
