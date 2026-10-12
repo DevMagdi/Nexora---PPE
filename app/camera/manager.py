@@ -30,6 +30,7 @@ from app.core.violation_checker import (
     BaseViolationChecker,
     ConstructionViolationChecker,
     MedicalViolationChecker,
+    apply_persist_floor,
 )
 from app.db.repository import record_alert_log, save_violation
 
@@ -63,14 +64,19 @@ class CameraManager:
         self._cleanup_task: asyncio.Task | None = None
         self._locks: dict[int, asyncio.Lock] = {}
 
+        construction_persist = apply_persist_floor(
+            settings.VIOLATION_PERSIST_SECONDS,
+            settings.VIOLATION_PERSIST_FLOOR_SECONDS,
+        )
         self._checkers: dict[str, BaseViolationChecker] = {
             "construction": ConstructionViolationChecker(
                 cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
-                persist_seconds=settings.VIOLATION_PERSIST_SECONDS,
+                persist_seconds=construction_persist,
             ),
             "medical": MedicalViolationChecker(
                 cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
                 persist_seconds=settings.MEDICAL_VIOLATION_PERSIST_SECONDS,
+                absence_persist_seconds=construction_persist,
             ),
         }
 

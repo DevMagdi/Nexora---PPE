@@ -21,6 +21,7 @@ from app.core.hybrid_detector import HybridConfig, HybridPPEDetector
 from app.core.violation_checker import (
     ConstructionViolationChecker,
     MedicalViolationChecker,
+    apply_persist_floor,
 )
 
 # ---------------------------------------------------------------------------
@@ -227,10 +228,66 @@ def test_construction_strong_skin_negative_used_as_evidence():
 
 
 def test_weak_person_does_not_trigger_absence_violation():
-    """Person متقلب بـ 0.26 (زي اللوج) مش بيثبت 'ناقص بالطو'."""
+    """Person متقلب بـ 0.26 أو 0.41 (زي اللوج) مش بيثبت 'ناقص بالطو'."""
     checker = MedicalViolationChecker(cooldown_seconds=10, persist_seconds=3)
-    detections = [make_detection("Person", 0.26, source="model:construction")]
-    assert _seed_and_check(checker, 3, "coat", detections) == []
+    assert _seed_and_check(checker, 3, "coat", [make_detection("Person", 0.26, source="model:construction")]) == []
+    assert _seed_and_check(checker, 4, "coat", [make_detection("Person", 0.41, source="model:construction")]) == []
+
+
+def test_negative_face_only_or_closeup_webcam_does_not_trigger_lab_coat():
+    """
+    إصلاح المشكلة #4: ظهور no mask وحده أو لقطة وجه قريبة على Webcam (حيث يغطي
+    الوجه >= 55% من ارتفاع مستطيل الشخص) لا يسجّل مخالفة no lab coat.
+    """
+    checker = MedicalViolationChecker(cooldown_seconds=10, persist_seconds=3)
+    # 1) no mask فقط بدون شخص أو قطعة موجبة
+    assert _seed_and_check(checker, 4, "coat", [make_detection("NO-Mask", 0.91, source="model:construction")]) == []
+    # 2) لقطة وجه قريبة (Person بارتفاع 200 و NO-Mask بارتفاع 140 = 70% من الشخص)
+    closeup = [
+        make_detection("Person", 0.85, box=(100, 50, 400, 250), source="model:construction"),
+        make_detection("NO-Mask", 0.91, box=(140, 60, 360, 200), source="model:construction"),
+    ]
+    assert _seed_and_check(checker, 5, "coat", closeup) == []
+
+
+def test_lab_coat_absence_uses_person_confidence_not_no_mask_confidence():
+    """إصلاح المشكلة #4: ثقة no lab coat تأتي من Person (0.68) وليس من NO-Mask (0.91)."""
+    checker = MedicalViolationChecker(cooldown_seconds=10, persist_seconds=3)
+    detections = [
+        make_detection("Person", 0.68, box=(100, 20, 420, 460), source="model:construction"),
+        make_detection("NO-Mask", 0.91, box=(180, 40, 320, 120), source="model:construction"),
+    ]
+    violations = _seed_and_check(checker, 6, "coat", detections)
+    assert len(violations) == 1
+    assert violations[0].violation_type == "no lab coat"
+    assert violations[0].confidence == pytest.approx(0.68)
+
+
+def test_persist_floor_and_medical_absence_persist_window():
+    """إصلاح المشكلة #4: رفع VIOLATION_PERSIST_SECONDS القديم (3 ثوانٍ) إلى الأرضية (8 ثوانٍ)."""
+    assert apply_persist_floor(3, 8) == 8
+    assert apply_persist_floor(10, 8) == 10
+
+    checker = MedicalViolationChecker(
+        cooldown_seconds=10,
+        persist_seconds=3,
+        absence_persist_seconds=8,
+    )
+    detections = [
+        make_detection("Person", 0.80, box=(100, 20, 420, 460), source="model:construction"),
+        make_detection("NO-Mask", 0.91, box=(180, 40, 320, 120), source="model:medical"),
+    ]
+    # بعد 4 ثوانٍ: الكشف السالب الصريح (no mask) يسجّل مخالفة، بينما غياب البالطو ينتظر 8 ثوانٍ
+    with patch("time.time", return_value=1004.0):
+        checker._get_state(8).state_for("mask").last_seen_time = 1000.0
+        checker._get_state(8).state_for("coat").last_seen_time = 1000.0
+        v_early = checker.check(8, detections, enabled_classes=["mask", "coat"])
+    assert [v.violation_type for v in v_early] == ["no mask"]
+
+    # بعد 8 ثوانٍ: غياب البالطو المستمر يسجّل مخالفته
+    with patch("time.time", return_value=1008.0):
+        v_late = checker.check(8, detections, enabled_classes=["mask", "coat"])
+    assert [v.violation_type for v in v_late] == ["no lab coat"]
 
 
 def test_strong_person_triggers_absence_violation():

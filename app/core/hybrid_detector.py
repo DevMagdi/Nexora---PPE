@@ -324,6 +324,10 @@ class HybridPPEDetector:
 
         if self.config.skin_filter_enabled and frame is not None:
             merged = self._apply_skin_heuristics(frame, merged, stats)
+            merged, post_duplicates = self._merge(merged)
+            stats.duplicates += post_duplicates
+            merged, post_conflicts = self._resolve_conflicts(merged)
+            stats.conflicts += post_conflicts
 
         if profile == "medical":
             # فايروول نهائي: كاميرا طبي مينفعش على الإطلاق تطلّع فئة إنشائية
@@ -370,24 +374,59 @@ class HybridPPEDetector:
         return bridged
 
     # ------------------------------------------------------------------
-    # Merging
+    # Merging & conflict resolution
     # ------------------------------------------------------------------
+
+    def _same_region(
+        self,
+        box_a: tuple[int, int, int, int],
+        box_b: tuple[int, int, int, int],
+        *,
+        anchor_box: tuple[int, int, int, int] | None = None,
+    ) -> bool:
+        """هل المستطيلان يمثّلان نفس المنطقة التشريحية (مع مراعاة الاحتواء أو المرجع كالرأس)؟"""
+        if _iou_boxes(box_a, box_b) >= self.config.conflict_iou:
+            return True
+        if _containment(box_a, box_b) >= self.config.override_min_containment:
+            return True
+        return bool(
+            anchor_box is not None
+            and (
+                _containment(box_a, anchor_box) >= self.config.override_min_containment
+                or _iou_boxes(box_a, anchor_box) >= self.config.conflict_iou
+                or _center_inside(box_a, anchor_box)
+            )
+        )
 
     def _merge(self, detections: list[Detection]) -> tuple[list[Detection], int]:
         """
         دمج كشوف الموديلين: تفضيل الأعلى ثقة + تعزيز الثقة عند اتفاق الموديلين
         على نفس الفئة ونفس المكان (confidence fusion).
+
+        يأخذ في الحسبان اختلاف حجم المستطيل بين الموديلين (أحدهما ضيق حول العينين
+        أو الفم والآخر أوسع على الوجه) عبر الاحتواء ``_containment`` وتقاطع المصادر
+        المختلفة حتى لا تتكرر ``Goggles`` أو ``NO-Mask`` مرتين لنفس الشخص.
         """
         kept: list[Detection] = []
         duplicates = 0
 
         for det in sorted(detections, key=lambda d: d.confidence, reverse=True):
             key = class_key(det.class_name)
+            det_box = detection_box(det)
             matched: Detection | None = None
             for existing in kept:
                 if class_key(existing.class_name) != key:
                     continue
-                if _iou(det, existing) >= self.config.merge_iou:
+                existing_box = detection_box(existing)
+                same_box = (
+                    _iou(det, existing) >= self.config.merge_iou
+                    or _containment(det_box, existing_box) >= self.config.override_min_containment
+                    or (
+                        existing.source != det.source
+                        and _iou(det, existing) >= self.config.conflict_iou
+                    )
+                )
+                if same_box:
                     matched = existing
                     break
 
@@ -397,21 +436,48 @@ class HybridPPEDetector:
 
             duplicates += 1
             if matched.source != det.source:
-                # اتفاق موديلين مختلفين => ثقة أعلى
-                fused = max(matched.confidence, det.confidence) + 0.10 * min(
-                    matched.confidence, det.confidence
-                )
-                matched.confidence = float(round(min(0.99, fused), 4))
-                matched.source = f"{matched.source}+{det.source}"
-                matched.x1 = min(matched.x1, det.x1)
-                matched.y1 = min(matched.y1, det.y1)
-                matched.x2 = max(matched.x2, det.x2)
-                matched.y2 = max(matched.y2, det.y2)
+                matched_is_skin = is_skin_source(matched.source)
+                det_is_skin = is_skin_source(det.source)
+                if matched_is_skin and not det_is_skin:
+                    # الكشف الموديلي أولى بقيادة المصدر والمستطيل من الكشف الصناعي
+                    matched.confidence = max(matched.confidence, det.confidence)
+                    matched.source = f"{det.source}+{matched.source}"
+                    matched.class_id = det.class_id
+                    matched.x1, matched.y1, matched.x2, matched.y2 = (
+                        det.x1,
+                        det.y1,
+                        det.x2,
+                        det.y2,
+                    )
+                elif det_is_skin and not matched_is_skin:
+                    # دمج كشف جلد صناعي في كشف موديلي قائم دون تضخيم المستطيل
+                    matched.confidence = max(matched.confidence, det.confidence)
+                    if det.source not in matched.source:
+                        matched.source = f"{matched.source}+{det.source}"
+                else:
+                    # اتفاق موديلين مختلفين => ثقة أعلى ومستطيل شامل
+                    fused = max(matched.confidence, det.confidence) + 0.10 * min(
+                        matched.confidence, det.confidence
+                    )
+                    matched.confidence = float(round(min(0.99, fused), 4))
+                    if det.source not in matched.source:
+                        matched.source = f"{matched.source}+{det.source}"
+                    matched.x1 = min(matched.x1, det.x1)
+                    matched.y1 = min(matched.y1, det.y1)
+                    matched.x2 = max(matched.x2, det.x2)
+                    matched.y2 = max(matched.y2, det.y2)
 
         return kept, duplicates
 
     def _resolve_conflicts(self, detections: list[Detection]) -> tuple[list[Detection], int]:
-        """يشيل التعارض بين فئة موجبة وسالبة على نفس المنطقة (يحتفظ بالأعلى ثقة)."""
+        """
+        يشيل التعارض بين فئة موجبة وسالبة على نفس المنطقة (مثل ``Goggles`` و ``NO-Goggles``).
+
+        * يعتمد على ``conflict_iou`` أو الاحتواء ``override_min_containment`` لأن بوكس
+          النظارة من الموديل بيكون أصغر وجوه بوكس الرأس من فلتر الجلد.
+        * الكشف السالب الصناعي (``skin:*``) لا يُسقط كشف الموديل الموجب إلا لو حقق
+          شروط ``positive_override_min_conf`` و ``positive_override_max_conf``.
+        """
         by_key: dict[str, list[Detection]] = {}
         for det in detections:
             by_key.setdefault(class_key(det.class_name), []).append(det)
@@ -424,14 +490,34 @@ class HybridPPEDetector:
             for neg in negatives:
                 if id(neg) in removed_ids:
                     continue
+                neg_box = detection_box(neg)
                 for pos in positives:
                     if id(pos) in removed_ids:
                         continue
-                    if _iou(pos, neg) < self.config.conflict_iou:
+                    pos_box = detection_box(pos)
+                    if (
+                        _iou(pos, neg) < self.config.conflict_iou
+                        and _containment(pos_box, neg_box) < self.config.override_min_containment
+                    ):
                         continue
-                    loser = neg if neg.confidence <= pos.confidence else pos
+
+                    neg_is_skin = is_skin_source(neg.source)
+                    pos_is_skin = is_skin_source(pos.source)
+                    if neg_is_skin and not pos_is_skin:
+                        can_override = (
+                            neg.confidence >= self.config.positive_override_min_conf
+                            and pos.confidence <= self.config.positive_override_max_conf
+                        )
+                        loser = pos if can_override else neg
+                    elif pos_is_skin and not neg_is_skin:
+                        loser = pos if pos.confidence <= neg.confidence else neg
+                    else:
+                        loser = neg if neg.confidence <= pos.confidence else pos
+
                     removed_ids.add(id(loser))
                     conflicts += 1
+                    if loser is neg:
+                        break
 
         if not removed_ids:
             return detections, conflicts
@@ -440,6 +526,22 @@ class HybridPPEDetector:
     # ------------------------------------------------------------------
     # Smart skin layer
     # ------------------------------------------------------------------
+
+    def _has_conflicting_positive(
+        self,
+        detections: list[Detection],
+        positive_name: str,
+        box: tuple[int, int, int, int],
+        *,
+        anchor_box: tuple[int, int, int, int] | None = None,
+    ) -> bool:
+        """هل توجد فئة موجبة قائمة على نفس المنطقة لم يتم إسقاطها؟"""
+        target = class_key(positive_name)
+        return any(
+            class_key(det.class_name) == target
+            and self._same_region(detection_box(det), box, anchor_box=anchor_box)
+            for det in detections
+        )
 
     def _upsert(
         self,
@@ -450,17 +552,20 @@ class HybridPPEDetector:
         source: str,
         *,
         boost: bool = True,
+        anchor_box: tuple[int, int, int, int] | None = None,
     ) -> Detection:
         """
         يضيف كشف جديد أو يعزّز كشف قائم لنفس الفئة على نفس المنطقة.
 
         مهم: الكشوف المُصنّعة (source=skin:*) بتتضاف بعد فلترة الثقة، فبتوصل
-        للـ violation checker على طول.
+        للـ violation checker على طول. وعند تمرير ``anchor_box`` (مثل مستطيل
+        الرأس كاملًا) يندمج كشف الفم/العينين مع كشف الموديل الموجود لنفس الرأس
+        بدل إضافة مستطيل ثانٍ مكرر لنفس الفئة.
         """
         for det in detections:
             if class_key(det.class_name) != class_key(class_name):
                 continue
-            if _containment(detection_box(det), box) >= self.config.override_min_containment:
+            if self._same_region(detection_box(det), box, anchor_box=anchor_box):
                 if boost:
                     det.confidence = max(det.confidence, float(round(confidence, 4)))
                     if source not in det.source:
@@ -471,7 +576,15 @@ class HybridPPEDetector:
         detections.append(new_det)
         return new_det
 
-    def _drop(self, detections: list[Detection], class_name: str, box: tuple[int, int, int, int], *, max_conf: float) -> int:
+    def _drop(
+        self,
+        detections: list[Detection],
+        class_name: str,
+        box: tuple[int, int, int, int],
+        *,
+        max_conf: float,
+        anchor_box: tuple[int, int, int, int] | None = None,
+    ) -> int:
         """
         يشيل كشف موجَب اتبيّن إنه غلط (الجلد مكشوف تحته) بشرط إن ثقته مش عالية جدًا.
         """
@@ -481,7 +594,7 @@ class HybridPPEDetector:
             if (
                 class_key(det.class_name) == class_key(class_name)
                 and det.confidence <= max_conf
-                and _containment(detection_box(det), box) >= self.config.override_min_containment
+                and self._same_region(detection_box(det), box, anchor_box=anchor_box)
             ):
                 removed += 1
                 continue
@@ -556,7 +669,10 @@ class HybridPPEDetector:
         )
         if not result.exposed:
             # شريط زجاجي على خط العينين => تأكيد إن النظارة موجودة فعلاً
-            if result.glass_ratio >= self.config.glass_confirm_min_ratio:
+            # (بشرط عدم وجود كشف سالب صريح من الموديل على نفس الرأس)
+            if result.glass_ratio >= self.config.glass_confirm_min_ratio and not self._has_conflicting_positive(
+                detections, "NO-Goggles", head, anchor_box=head
+            ):
                 confidence = self._skin_confidence(
                     0.50
                     + 0.45
@@ -564,23 +680,32 @@ class HybridPPEDetector:
                         result.glass_ratio, self.config.glass_confirm_min_ratio, 0.25
                     )
                 )
-                self._upsert(detections, "Goggles", confidence, head, SOURCE_GLASS)
+                self._upsert(detections, "Goggles", confidence, head, SOURCE_GLASS, anchor_box=head)
                 stats.glass_confirmations += 1
                 logger.debug("glass band confirmed goggles: ratio=%.2f", result.glass_ratio)
             return
 
         confidence = self._skin_confidence(result.confidence)
-        det = self._upsert(detections, "NO-Goggles", confidence, head, SOURCE_EYE_BRIDGE)
-        stats.eye_bridge_hits += 1
-
-        # الوش مكشوف => لو فيه كشف نظارة ضعيف على نفس المنطقة نشيله
+        # الوش مكشوف => لو فيه كشف نظارة ضعيف على نفس المنطقة نشيله أولاً
         # (لازم الهوريستيك نفسه واثق بدرجة كافية كمان — positive_override_min_conf)
+        removed = 0
         if confidence >= self.config.positive_override_min_conf:
             removed = self._drop(
-                detections, "Goggles", head, max_conf=self.config.positive_override_max_conf
+                detections,
+                "Goggles",
+                head,
+                max_conf=self.config.positive_override_max_conf,
+                anchor_box=head,
             )
-            if removed and det in detections:
-                det.confidence = self._skin_confidence(confidence + 0.05)
+
+        # إذا بقيت نظارة موجبة من الموديل على نفس الرأس، لا نضيف NO-Goggles فوقها
+        # حتى لا يظهر Goggles و NO-Goggles معاً في نفس الفريم
+        if self._has_conflicting_positive(detections, "Goggles", head, anchor_box=head):
+            return
+
+        boosted_conf = self._skin_confidence(confidence + 0.05) if removed else confidence
+        self._upsert(detections, "NO-Goggles", boosted_conf, head, SOURCE_EYE_BRIDGE, anchor_box=head)
+        stats.eye_bridge_hits += 1
 
         logger.debug(
             "eye-bridge: skin_ratio=%.2f eyes=%d conf=%.2f",
@@ -638,16 +763,29 @@ class HybridPPEDetector:
                 continue
 
             confidence = self._skin_confidence(result.confidence)
-            det = self._upsert(detections, "NO-Goggles", confidence, zone, SOURCE_ANATOMICAL_BRIDGE)
-            stats.eye_bridge_hits += 1
-
-            # الوش مكشوف => لو فيه كشف نظارة ضعيف على نفس المنطقة نشيله
+            removed = 0
             if confidence >= self.config.positive_override_min_conf:
                 removed = self._drop(
-                    detections, "Goggles", zone, max_conf=self.config.positive_override_max_conf
+                    detections,
+                    "Goggles",
+                    zone,
+                    max_conf=self.config.positive_override_max_conf,
+                    anchor_box=zone,
                 )
-                if removed and det in detections:
-                    det.confidence = self._skin_confidence(confidence + 0.05)
+
+            if self._has_conflicting_positive(detections, "Goggles", zone, anchor_box=zone):
+                continue
+
+            boosted_conf = self._skin_confidence(confidence + 0.05) if removed else confidence
+            self._upsert(
+                detections,
+                "NO-Goggles",
+                boosted_conf,
+                zone,
+                SOURCE_ANATOMICAL_BRIDGE,
+                anchor_box=zone,
+            )
+            stats.eye_bridge_hits += 1
 
             logger.debug(
                 "anatomical eye-bridge (mask anchor): skin_ratio=%.2f eyes=%d conf=%.2f",
@@ -677,17 +815,32 @@ class HybridPPEDetector:
         confidence = self._skin_confidence(
             0.55 + 0.40 * ratio_confidence(ratio, self.config.skin_strong_ratio, upper)
         )
-        det = self._upsert(detections, "NO-Mask", confidence, lower, SOURCE_MOUTH)
-        stats.mouth_skin_hits += 1
 
         # إسقاط كمامة موجبة محتاج دليل أقوى بكتير (كان 0.55 بيأسد كشف Mask
         # لغاية 0.75 — ده كان بيقتل الكمامات الحقيقية ضعيفة الثقة)
+        removed = 0
         if confidence >= self.config.positive_override_min_conf:
             removed = self._drop(
-                detections, "Mask", lower, max_conf=self.config.positive_override_max_conf
+                detections,
+                "Mask",
+                lower,
+                max_conf=self.config.positive_override_max_conf,
+                anchor_box=head,
             )
-            if removed and det in detections:
-                det.confidence = self._skin_confidence(confidence + 0.05)
+
+        if self._has_conflicting_positive(detections, "Mask", lower, anchor_box=head):
+            return
+
+        boosted_conf = self._skin_confidence(confidence + 0.05) if removed else confidence
+        self._upsert(
+            detections,
+            "NO-Mask",
+            boosted_conf,
+            lower,
+            SOURCE_MOUTH,
+            anchor_box=head,
+        )
+        stats.mouth_skin_hits += 1
 
         logger.debug("mouth-skin: ratio=%.2f conf=%.2f", ratio, confidence)
 

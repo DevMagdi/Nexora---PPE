@@ -279,6 +279,8 @@ export default function App() {
     [baseParams, camFilter, typeFilter],
   )
 
+  const isViolationsTab = tab === "violations"
+
   const {
     data: overviewData,
     isLoading: overviewLoading,
@@ -291,7 +293,10 @@ export default function App() {
     isLoading: loadingV,
     isError: violationsError,
     refetch: refetchViolations,
-  } = useViolations(tableParams)
+  } = useViolations(tableParams, {
+    enabled: isViolationsTab,
+    refetchInterval: isViolationsTab ? 10_000 : false,
+  })
 
   const byNewest = (a: Violation, b: Violation) =>
     parseTs(b.timestamp).getTime() - parseTs(a.timestamp).getTime()

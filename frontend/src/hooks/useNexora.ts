@@ -134,12 +134,16 @@ export function useStopCamera() {
   })
 }
 
-export function useViolations(params?: Parameters<typeof getViolations>[0]) {
+export function useViolations(
+  params?: Parameters<typeof getViolations>[0],
+  options?: { enabled?: boolean; refetchInterval?: number | false },
+) {
   return useQuery({
     queryKey: ["violations", params ?? {}],
     queryFn: () => getViolations(params),
     placeholderData: (prev) => prev,
-    refetchInterval: 10_000,
+    enabled: options?.enabled ?? true,
+    refetchInterval: options?.refetchInterval ?? 10_000,
   })
 }
 
