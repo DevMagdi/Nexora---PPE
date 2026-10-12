@@ -87,11 +87,45 @@ export interface LiveCountsRaw {
   person?: number
   no_mask?: number
   no_gloves?: number
+  no_goggles?: number
   no_cap?: number
+  skin_hits?: number
   total?: number
   // مفاتيح قديمة لو في نسخة باك أقدم
   hardhat_count?: number
   vest_count?: number
   person_count?: number
   total_detections?: number
+}
+
+/* ─── UI & Dashboard Types ─── */
+
+export type RangeKey = "24h" | "7d"
+export type TabKey = "overview" | "live" | "cameras" | "violations"
+export type ToneKey = "primary" | "info" | "warning" | "destructive" | "success"
+export type LiveStatus = "idle" | "connecting" | "open" | "reconnecting"
+export type ViolationStatusFilter = "all" | "open" | "resolved"
+
+export interface ToastState {
+  id: number
+  tone: "success" | "error"
+  text: string
+}
+
+export interface LiveCounts {
+  hardhat?: number
+  vest?: number
+  person?: number
+  no_mask?: number
+  no_gloves?: number
+  no_goggles?: number
+  no_cap?: number
+  /** كشوف أكّدها/ولّدها فلتر الجلد (distanceTransform / جسر العينين) */
+  skin_hits?: number
+  total?: number
+}
+
+export interface LiveMetricItem {
+  value: number | undefined
+  label: string
 }
