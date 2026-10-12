@@ -53,10 +53,21 @@ class FakeManager:
 
 
 class FakeWebSocket:
-    def __init__(self, *, cookies=None, origin="http://localhost:5173", query=None, events=None, manager=None):
+    def __init__(
+        self,
+        *,
+        cookies=None,
+        origin="http://localhost:5173",
+        host="localhost:8000",
+        query=None,
+        events=None,
+        manager=None,
+    ):
         self.events = events if events is not None else []
         self.cookies = cookies or {}
-        self.headers = {"origin": origin} if origin else {}
+        self.headers = {"host": host}
+        if origin:
+            self.headers["origin"] = origin
         self.query_params = query or {}
         self.url = SimpleNamespace(scheme="ws")
         self.app = SimpleNamespace(state=SimpleNamespace(camera_manager=manager))
@@ -129,6 +140,28 @@ async def test_websocket_rejects_cross_origin_before_authentication():
     await stream.websocket_stream(socket, 5)
     assert socket.accepted is False
     assert socket.close_events[0][1] == "Untrusted origin"
+
+
+async def test_websocket_accepts_same_origin_dashboard_served_by_backend(monkeypatch):
+    user = SimpleNamespace(id=1, sector="both", is_active=True, must_change_password=False, token_version=0)
+    camera = SimpleNamespace(id=5, profile="construction")
+    events = []
+    manager = FakeManager(events, [True, False])
+    monkeypatch.setattr(stream, "AsyncSessionLocal", lambda: FakeDB(user, camera, events))
+    token = create_access_token("1", token_type="media", token_version=0)
+    socket = FakeWebSocket(
+        origin="http://localhost:8000",
+        host="localhost:8000",
+        cookies={media_cookie_name(): token},
+        events=events,
+        manager=manager,
+    )
+
+    await stream.websocket_stream(socket, 5)
+
+    assert socket.accepted is True
+    assert "manager:subscribe" in events
+    assert "manager:unsubscribe" in events
 
 
 async def test_websocket_validates_user_sector_and_camera_before_accept(monkeypatch):

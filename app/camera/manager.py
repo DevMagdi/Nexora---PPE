@@ -45,6 +45,10 @@ class _CameraEntry:
     task: asyncio.Task | None = None
     latest_frame: bytes | None = None
     frame_seq: int = 0
+    last_frame_at: float = 0.0
+    first_frame_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    consecutive_read_failures: int = 0
+    last_read_warning_at: float = 0.0
     latest_counts: dict = field(default_factory=dict)
     alert_sent_until: float = 0.0
     last_det_log: float = 0.0
@@ -194,8 +198,29 @@ class CameraManager:
                 return False
 
             source = self._build_source(source_type, source_uri)
-            connected = await source.connect()
+            logger.info(
+                "Opening camera source (camera_id=%d source_type=%s profile=%s)",
+                camera_id,
+                source_type,
+                profile,
+            )
+            try:
+                connected = await source.connect()
+            except Exception as exc:
+                logger.error(
+                    "Camera source failed to open (camera_id=%d error_type=%s)",
+                    camera_id,
+                    type(exc).__name__,
+                )
+                with contextlib.suppress(Exception):
+                    await source.release()
+                raise ValueError(
+                    "Could not open the camera source. Check its index, permissions, and availability."
+                ) from None
             if not connected:
+                logger.error("Camera source did not open (camera_id=%d source_type=%s)", camera_id, source_type)
+                with contextlib.suppress(Exception):
+                    await source.release()
                 return False
 
             entry = _CameraEntry(
@@ -209,6 +234,26 @@ class CameraManager:
             logger.info("Camera %d processing started (profile=%s)", camera_id, profile)
             return True
 
+    async def _wait_for_first_frame(self, entry: _CameraEntry) -> bool:
+        if entry.first_frame_ready.is_set():
+            return self.is_running(entry.camera_id)
+        if entry.task is None or entry.task.done():
+            return False
+
+        frame_waiter = asyncio.create_task(entry.first_frame_ready.wait())
+        try:
+            await asyncio.wait(
+                {frame_waiter, entry.task},
+                timeout=settings.CAMERA_FIRST_FRAME_TIMEOUT_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not frame_waiter.done():
+                frame_waiter.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await frame_waiter
+        return entry.first_frame_ready.is_set() and self.is_running(entry.camera_id)
+
     async def start_camera(
         self,
         camera_id: int,
@@ -217,9 +262,37 @@ class CameraManager:
         source_uri: str,
         enabled_classes: list[str] | None = None,
     ) -> bool:
-        return await self._launch_camera(
+        existing = self._entries.get(camera_id)
+        if existing and existing.task and not existing.task.done():
+            if self.is_running(camera_id):
+                logger.info("Camera %d is already streaming", camera_id)
+                return True
+            if await self._wait_for_first_frame(existing):
+                return True
+            logger.warning("Restarting camera %d because no fresh frame is available", camera_id)
+            await self.stop_camera(camera_id)
+
+        if not await self._launch_camera(
             camera_id, profile, source_type, source_uri, enabled_classes
-        )
+        ):
+            return False
+
+        entry = self._entries.get(camera_id)
+        if entry is None or not await self._wait_for_first_frame(entry):
+            logger.error(
+                "Camera %d opened but produced no usable frame within %.1f seconds",
+                camera_id,
+                settings.CAMERA_FIRST_FRAME_TIMEOUT_SECONDS,
+            )
+            await self.stop_camera(camera_id)
+            raise ValueError(
+                "The camera opened but no video frame arrived in time. Check the camera index, "
+                "Windows camera permissions, and whether another app is using it. If the backend "
+                "runs in Docker, the host webcam must be exposed to the container."
+            )
+
+        logger.info("Camera %d is live and its first processed frame is ready", camera_id)
+        return True
 
     async def stop_camera(self, camera_id: int) -> bool:
         async with self._get_lock(camera_id):
@@ -370,8 +443,28 @@ class CameraManager:
             while True:
                 frame = await entry.source.read_frame()
                 if frame is None:
+                    entry.consecutive_read_failures += 1
+                    now = time.monotonic()
+                    if (
+                        entry.consecutive_read_failures == 1
+                        or now - entry.last_read_warning_at >= 5.0
+                    ):
+                        logger.warning(
+                            "Camera %d source is open but returned no frame (%d consecutive read failures)",
+                            camera_id,
+                            entry.consecutive_read_failures,
+                        )
+                        entry.last_read_warning_at = now
                     await asyncio.sleep(settings.FRAME_READ_RETRY_DELAY_SECONDS)
                     continue
+
+                if entry.consecutive_read_failures:
+                    logger.info(
+                        "Camera %d recovered frame input after %d failed read(s)",
+                        camera_id,
+                        entry.consecutive_read_failures,
+                    )
+                    entry.consecutive_read_failures = 0
 
                 detections = await loop.run_in_executor(None, detector.detect, frame)
                 entry.latest_counts = self._compute_counts(entry.profile, detections)
@@ -414,6 +507,16 @@ class CameraManager:
                 _, jpeg = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
                 entry.latest_frame = jpeg.tobytes()
                 entry.frame_seq += 1
+                entry.last_frame_at = time.monotonic()
+                if not entry.first_frame_ready.is_set():
+                    entry.first_frame_ready.set()
+                    height, width = frame.shape[:2]
+                    logger.info(
+                        "Camera %d first processed frame ready (%dx%d)",
+                        camera_id,
+                        width,
+                        height,
+                    )
 
                 await self._broadcast(camera_id, entry.latest_counts)
                 await asyncio.sleep(0)
@@ -495,7 +598,9 @@ class CameraManager:
 
     def is_running(self, camera_id: int) -> bool:
         entry = self._entries.get(camera_id)
-        return entry is not None and entry.task is not None and not entry.task.done()
+        if entry is None or entry.task is None or entry.task.done() or entry.frame_seq == 0:
+            return False
+        return time.monotonic() - entry.last_frame_at < settings.CAMERA_FRAME_STALE_SECONDS
 
     def active_count(self) -> int:
         return sum(1 for cid in self._entries if self.is_running(cid))

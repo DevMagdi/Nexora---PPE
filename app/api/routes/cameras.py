@@ -211,7 +211,14 @@ async def start_camera(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not ok:
-        raise HTTPException(status_code=400, detail="Failed to start camera (check source URI)")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not open the camera source. Check the URI or webcam index, operating-system "
+                "camera permissions, and whether another app is using the device. If the backend "
+                "runs in Docker, expose the host camera to the container."
+            ),
+        )
 
     cam.is_active = True
     _audit(request, db, "camera.started", user, cam)

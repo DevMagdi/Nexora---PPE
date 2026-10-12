@@ -19,6 +19,7 @@ import {
   useViolations,
 } from "@/hooks/useNexora"
 import { downloadViolationsCsv, getMjpegStreamUrl, getWebSocketUrl, logout, refreshMediaSession, resolveFrameUrl } from "@/lib/api"
+import { getErrorMessage } from "@/lib/utils"
 import nexoraLogoColor from "@/assets/logo/nexora-logo-full-color.svg"
 import nexoraLogoWhite from "@/assets/logo/nexora-logo-full-white.svg"
 import {
@@ -1166,7 +1167,7 @@ export default function App() {
       const verb = c.is_running ? "إيقاف" : "تشغيل"
       mut.mutate(c.id, {
         onSuccess: () => notify("success", `تم ${verb} «${c.name}» بنجاح`),
-        onError: () => notify("error", `تعذّر ${verb} «${c.name}». تحقق من مصدر الفيديو.`),
+        onError: (error) => notify("error", `${getErrorMessage(error, `تعذّر ${verb} «${c.name}»`)} · ${c.name}`),
       })
     },
     [startMut, stopMut, notify],
@@ -1316,18 +1317,30 @@ export default function App() {
     }
     const camId = selectedCamera.id
     let ws: WebSocket | null = null
-    let timer = 0
+    let reconnectTimer = 0
+    let connectionTimer = 0
     let attempts = 0
     let disposed = false
 
     const connect = () => {
+      if (disposed) return
       setLiveStatus(attempts ? "reconnecting" : "connecting")
-      ws = new WebSocket(getWebSocketUrl(camId))
-      ws.onopen = () => {
+      const socket = new WebSocket(getWebSocketUrl(camId))
+      ws = socket
+      connectionTimer = window.setTimeout(() => {
+        if (socket.readyState === WebSocket.CONNECTING) socket.close()
+      }, 10_000)
+
+      socket.onopen = () => {
+        window.clearTimeout(connectionTimer)
+        if (disposed) {
+          socket.close()
+          return
+        }
         attempts = 0
         setLiveStatus("open")
       }
-      ws.onmessage = (e) => {
+      socket.onmessage = (e) => {
         try {
           const d = JSON.parse(e.data)
           const next = normalizeLiveCounts(d)
@@ -1336,17 +1349,20 @@ export default function App() {
           /* رسالة غير صالحة */
         }
       }
-      ws.onerror = () => ws?.close()
-      ws.onclose = () => {
+      socket.onerror = () => socket.close()
+      socket.onclose = () => {
+        window.clearTimeout(connectionTimer)
         if (disposed) return
+        setLiveStatus("reconnecting")
         attempts++
-        timer = window.setTimeout(connect, Math.min(1000 * 2 ** attempts, 15_000))
+        reconnectTimer = window.setTimeout(connect, Math.min(1000 * 2 ** attempts, 15_000))
       }
     }
     connect()
     return () => {
       disposed = true
-      clearTimeout(timer)
+      window.clearTimeout(reconnectTimer)
+      window.clearTimeout(connectionTimer)
       ws?.close()
       setCounts({})
       setLiveStatus("idle")

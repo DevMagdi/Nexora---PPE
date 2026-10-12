@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./ppe_detection.db"
     DB_SQL_ECHO: bool = False
+    DB_MIGRATION_CONNECT_TIMEOUT_SECONDS: int = 15
+    DB_MIGRATION_LOCK_TIMEOUT_MS: int = 15_000
 
     # Authentication & bootstrap account. Defaults are random and development-only.
     JWT_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
@@ -137,6 +139,8 @@ class Settings(BaseSettings):
     # Camera loop timing
     FRAME_READ_RETRY_DELAY_SECONDS: float = 0.05
     STREAM_FPS_DELAY_SECONDS: float = 0.04
+    CAMERA_FIRST_FRAME_TIMEOUT_SECONDS: float = 10.0
+    CAMERA_FRAME_STALE_SECONDS: float = 15.0
 
     # Email alerts
     SENDER_EMAIL: str = ""
@@ -160,6 +164,12 @@ class Settings(BaseSettings):
             raise ValueError("Login rate limit settings must be positive")
         if self.LOGIN_LOCKOUT_ATTEMPTS < 1 or self.LOGIN_LOCKOUT_MINUTES < 1:
             raise ValueError("Login lockout settings must be positive")
+        if self.DB_MIGRATION_CONNECT_TIMEOUT_SECONDS < 1:
+            raise ValueError("DB_MIGRATION_CONNECT_TIMEOUT_SECONDS must be positive")
+        if self.DB_MIGRATION_LOCK_TIMEOUT_MS < 1:
+            raise ValueError("DB_MIGRATION_LOCK_TIMEOUT_MS must be positive")
+        if self.CAMERA_FIRST_FRAME_TIMEOUT_SECONDS <= 0 or self.CAMERA_FRAME_STALE_SECONDS <= 0:
+            raise ValueError("Camera frame timeout settings must be positive")
 
         # A short JWT secret triggers PyJWT's InsecureKeyLengthWarning at login
         # time and makes session/media tokens forgeable, so reject it in every
