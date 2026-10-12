@@ -3,9 +3,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from app.core.detector import Detection
+from app.core.config import settings
+from app.core.detector import Detection, is_skin_source
 from app.core.logging import get_logger
 from app.core.ppe import (
+    CONSTRUCTION_ONLY_CLASSES,
     PPE_CLASS_MAPS,
     Profile,
     canonical_class_name,
@@ -27,6 +29,9 @@ PPE_PRIORITY: list[str] = [
     "shoe_cover",
 ]
 MIN_PERSON_OVERLAP = 0.4
+# أدنى ثقة ليعتبر الـ Person من الموديل الإنشائي "سياقاً موثوقاً" في كاميرا طبية
+# (كان أي Person بـ 0.26 يتقلب بيكتب مخالفات "ناقص بالطو/غطاء" على الفاضي)
+MIN_MEDICAL_CONTEXT_CONF = 0.35
 
 
 @dataclass
@@ -76,12 +81,75 @@ _MEDICAL_CONTEXT_NAMES: set[str] = {"person"} | {
 
 def _has_medical_context(detections: list[Detection]) -> bool:
     """
-    فيه سياق طبي في الكادر؟
+    فيه سياق طبي موثوق في الكادر؟
 
     الشخص ممكن يجي من الموديل الإنشائي (النظام الهجين)، والقطع الطبية من
     الموديل الطبي — الاتنين يعتبروا دليل على وجود طاقم في الكادر.
+
+    الشخص الضعيف (تحت ``MIN_MEDICAL_CONTEXT_CONF``) مش بيعتبر سياقاً — كان
+    بيخلي كاميرا طبية تكتب "ناقص بالطو/غطاء كامل" لمجرد بوكس متقلب من
+    الموديل الإنشائي على خلفية، وده اللي حصل في اللوج.
     """
-    return any(_norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES for d in detections)
+    return any(
+        _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES
+        and (
+            _norm_name(d.class_name) != "person"
+            or d.confidence >= MIN_MEDICAL_CONTEXT_CONF
+        )
+        for d in detections
+    )
+
+
+def _violation_evidence_conf(
+    detections: list[Detection],
+    negative: str,
+    *,
+    min_skin_conf: float | None = None,
+) -> float | None:
+    """
+    أعلى ثقة صالحة كـ **دليل مخالفة** لفئة سالبة على الكادر، أو ``None``.
+
+    الكشوف المولَّدة من فلتر الجلد (``skin:*``) أدنى ثقة من كشوف الموديلات —
+    لو كل النيغاتيفات مصدرها الجلد وثقتها تحت ``min_skin_conf`` فمش بنقبلها
+    كدليل تسجيل مخالفة (بتتعرض على البث بس). ده اللي شال تكرار مخالفات
+    "no mask / no hand gloves" الناتجة عن هوريستيك ضعيفة اتكررت كل فريم.
+    """
+    key = _norm_name(negative)
+    model_confs: list[float] = []
+    skin_confs: list[float] = []
+    for d in detections:
+        if _norm_name(d.class_name) != key:
+            continue
+        if is_skin_source(d.source):
+            skin_confs.append(d.confidence)
+        else:
+            model_confs.append(d.confidence)
+
+    candidates = list(model_confs)
+    if min_skin_conf is None:
+        candidates.extend(skin_confs)
+    else:
+        candidates.extend(c for c in skin_confs if c >= min_skin_conf)
+
+    return max(candidates) if candidates else None
+
+
+def _medical_context_conf(detections: list[Detection]) -> float:
+    """
+    أعلى ثقة سياق طبي **موثوق** في الكادر (بتستخدم كثقة مخالفات الغياب).
+
+    الشخص الضعيف بيتجاهل حتى لا تُسجل مخالفات غياب بثقة بوكس متقلب.
+    """
+    confs = [
+        d.confidence
+        for d in detections
+        if _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES
+        and (
+            _norm_name(d.class_name) != "person"
+            or d.confidence >= MIN_MEDICAL_CONTEXT_CONF
+        )
+    ]
+    return max(confs, default=0.0)
 
 
 def _overlap_ratio(inner: Detection, outer: Detection) -> float:
@@ -189,19 +257,24 @@ class ConstructionViolationChecker(BaseViolationChecker):
                 assigned = assignment[i]
                 assigned_names = _assigned_names(assigned)
                 has_positive = bool(positive) and _norm_name(positive) in assigned_names
-                has_negative = bool(negative) and _norm_name(negative) in assigned_names
+                # الدليل السالب لازم يكون موثوق: كشوف الجلد الضعيفة (تحت
+                # SKIN_NEGATIVE_MIN_CONF) مش بتثبت "سالب" ولا بتموّل مخالفة
+                neg_evidence = (
+                    _violation_evidence_conf(
+                        assigned,
+                        str(negative),
+                        min_skin_conf=settings.SKIN_NEGATIVE_MIN_CONF,
+                    )
+                    if negative
+                    else None
+                )
 
-                is_missing = bool(has_negative or (positive and not has_positive))
+                is_missing = bool(neg_evidence is not None or (positive and not has_positive))
                 if is_missing:
-                    # لو فيه كشف سالب صريح (من الموديل أو من فلتر الجلد/جسر العينين)
+                    # لو فيه كشف سالب صريح (من الموديل أو من فلتر الجلد القوي)
                     # ثقته أدق من ثقة مستطيل الشخص
-                    explicit_negatives = [
-                        d.confidence
-                        for d in assigned
-                        if negative and _norm_name(d.class_name) == _norm_name(negative)
-                    ]
                     missing_confidences.append(
-                        max(explicit_negatives) if explicit_negatives else person.confidence
+                        neg_evidence if neg_evidence is not None else person.confidence
                     )
 
             missing_count = len(missing_confidences)
@@ -273,6 +346,15 @@ class MedicalViolationChecker(BaseViolationChecker):
         state = self._get_state(camera_id)
         now = time.time()
 
+        # فايروول البروفايل الطبي: الفئات الإنشائية الخالصة (خوذة/فيست/بوت)
+        # يتم تجاهلها تمامًا مهما كان مصدرها — كاميرا طبي عمرها ما تقيّم
+        # معدات إنشائية، فوجود كشف زيدها في الكادر مالوش أي تأثير هنا.
+        detections = [
+            d
+            for d in detections
+            if canonical_class_name(d.class_name) not in CONSTRUCTION_ONLY_CLASSES
+        ]
+
         cfg_map = PPE_CLASS_MAPS["medical"]
         enabled_sorted = sorted(
             enabled_classes,
@@ -292,21 +374,21 @@ class MedicalViolationChecker(BaseViolationChecker):
             ppe_state = state.state_for(ppe_key)
 
             if negative:
-                neg_key = _norm_name(negative)
-                neg_confs = [d.confidence for d in detections if _norm_name(d.class_name) == neg_key]
-                is_violating = len(neg_confs) > 0
-                confidence = max(neg_confs) if neg_confs else 0.0
+                evidence = _violation_evidence_conf(
+                    detections,
+                    str(negative),
+                    min_skin_conf=settings.SKIN_NEGATIVE_MIN_CONF,
+                )
+                is_violating = evidence is not None
+                confidence = evidence if evidence is not None else 0.0
                 violation_type = negative
             elif positive:
                 pos_key = _norm_name(positive)
                 has_positive = any(_norm_name(d.class_name) == pos_key for d in detections)
-                # لا نعتبر الفئة الموجبة غائبة إلا لو فيه سياق طبي بالكادر
-                # (شخص من الموديل الإنشائي أو أي قطعة طبية) — مش أي كشف عشوائي
+                # لا نعتبر الفئة الموجبة غائبة إلا لو فيه سياق طبي موثوق بالكادر
+                # (شخص واضح من الموديل الإنشائي أو أي قطعة طبية) — مش أي كشف عشوائي
                 is_violating = medical_context and not has_positive
-                confidence = max(
-                    (d.confidence for d in detections if _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES),
-                    default=0.0,
-                )
+                confidence = _medical_context_conf(detections)
                 violation_type = f"no {label}"
             else:
                 continue

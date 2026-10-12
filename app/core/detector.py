@@ -17,8 +17,14 @@ SOURCE_SKIN_PREFIX = "skin:"
 
 
 def is_skin_source(source: str | None) -> bool:
-    """هل الكشف ده جه/اتأكّد من فلتر الجلد (distanceTransform / جسر العينين)؟"""
-    return bool(source) and SOURCE_SKIN_PREFIX in source
+    """
+    هل الكشف ده **مولَّد** من فلتر الجلد (distanceTransform / جسر العينين / الفم)؟
+
+    مهم نستخدم ``startswith`` مش مجرد بحث عن ``skin:`` — لأن الكشف الموديلي
+    اللي اتأكّد بالجلد بياخد source مثل ``model:construction+skin:mouth``،
+    وده فنيًا كشف موديل مؤكَّد وثقته كاملة في منطق المخالفات، مش كشف صناعي.
+    """
+    return bool(source) and source.startswith(SOURCE_SKIN_PREFIX)
 
 # ألوان (نغطي construction + medical names)
 CLASS_COLORS_BY_NAME = {
@@ -180,6 +186,54 @@ def sanitize_class_conf_thresholds(
     return kept
 
 
+def apply_confidence_floor(
+    global_conf: float,
+    class_conf: dict[int, float],
+    floor: float,
+    *,
+    model_label: str = "",
+) -> tuple[float, dict[int, float]]:
+    """
+    يرفع أي عتبة ثقة أقل من الأرضية الدنيا (``DETECTION_CONFIDENCE_FLOOR``).
+
+    إعدادات منخفضة أوي (0.05 / 0.10) بتنتج كشوف وهمية بكتلة — زي اللي ظهر في
+    لوج 2026-10-12: Person بيتقلب بين 0.26 و 0.93 كل فريم وكشوف صناعية بثقة
+    0.96. الأرضية دي حاجز أدنى للدقة بلا مساس بإعدادات المستخدم الأعلى.
+
+    يرجع ``(global_conf_after, class_conf_after)`` مع تحذير في اللوج لكل قيمة
+    اترفعت.
+    """
+    if floor <= 0:
+        return global_conf, class_conf
+
+    if global_conf < floor:
+        logger.warning(
+            "%sGlobal detection confidence %.2f is below the precision floor %.2f; raising it",
+            f"[{model_label}] " if model_label else "",
+            global_conf,
+            floor,
+        )
+        global_conf = floor
+
+    raised: dict[int, float] = {}
+    adjusted: dict[int, float] = {}
+    for cid, thr in class_conf.items():
+        if thr < floor:
+            raised[cid] = floor
+            adjusted[cid] = floor
+        else:
+            adjusted[cid] = thr
+    if raised:
+        logger.warning(
+            "%sClass conf threshold(s) %s below the precision floor %.2f were raised",
+            f"[{model_label}] " if model_label else "",
+            raised,
+            floor,
+        )
+
+    return global_conf, adjusted
+
+
 class PPEDetector:
     def __init__(
         self,
@@ -199,9 +253,25 @@ class PPEDetector:
         self.class_conf = sanitize_class_conf_thresholds(
             self.model.names, settings.parse_class_thresholds_str(class_conf_thresholds)
         )
+        # حاجز الدقة: عتبات أقل من الأرضية الدنيا بتترفع تلقائيًا (بلوج تحذيري)
+        self.confidence, self.class_conf = apply_confidence_floor(
+            self.confidence,
+            self.class_conf,
+            settings.DETECTION_CONFIDENCE_FLOOR,
+            model_label=os.path.basename(resolved_path),
+        )
+        # الـ default class conf نفسه مش فايت من الخريطة — نطبّق عليه الأرضية كمان
+        if self.default_class_conf < settings.DETECTION_CONFIDENCE_FLOOR:
+            logger.warning(
+                "[%s] Default class conf %.2f is below the precision floor %.2f; raising it",
+                os.path.basename(resolved_path),
+                self.default_class_conf,
+                settings.DETECTION_CONFIDENCE_FLOOR,
+            )
+            self.default_class_conf = settings.DETECTION_CONFIDENCE_FLOOR
         self._lock = threading.Lock()
 
-        logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, confidence)
+        logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, self.confidence)
         logger.info("Default class conf: %.2f", self.default_class_conf)
         logger.info("Class-specific conf map: %s", self.class_conf)
         logger.info("Model classes: %s", self.model.names)

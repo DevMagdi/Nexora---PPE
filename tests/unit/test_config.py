@@ -10,8 +10,10 @@ def test_defaults():
     assert s.APP_ENV == "dev"
     assert s.CONSTRUCTION_MODEL_PATH == "Model/ppe.pt"
     assert s.MEDICAL_MODEL_PATH == "Model/bestMedicalModel.pt"
-    assert s.CONSTRUCTION_DETECTION_CONFIDENCE == pytest.approx(0.10)
-    assert s.MEDICAL_DETECTION_CONFIDENCE == pytest.approx(0.15)
+    # الافتراضيات اترفعت لحارس الدقة (precision floor) — كانت 0.10/0.15
+    assert s.CONSTRUCTION_DETECTION_CONFIDENCE == pytest.approx(0.25)
+    assert s.MEDICAL_DETECTION_CONFIDENCE == pytest.approx(0.25)
+    assert s.DETECTION_CONFIDENCE_FLOOR == pytest.approx(0.25)
     assert s.ALERT_COOLDOWN_SECONDS == 60
 
 
@@ -26,6 +28,21 @@ def test_hybrid_and_skin_defaults():
     assert 0.0 < s.SKIN_MIN_RATIO < s.SKIN_STRONG_RATIO < 1.0
     assert s.SKIN_BARE_HAND_MIN_THICKNESS == pytest.approx(0.12)
     assert s.SKIN_EYE_BRIDGE_MIN_SKIN_RATIO == pytest.approx(0.22)
+
+
+def test_precision_guard_defaults():
+    """حراس الدقة الجدد (من إصلاح لوج 2026-10-12) لازم يكون ليهم حدود منطقية."""
+    s = Settings(_env_file=None)
+    # سقف الكشوف الصناعية أقل من 0.9 (الهوريستيك مش موديل)
+    assert 0.4 <= s.SKIN_SYNTHETIC_MIN_CONF < s.SKIN_SYNTHETIC_MAX_CONF <= 0.9
+    # دليل الجلد لمخالفة لازم يكون أقوى من أرضية العرض
+    assert s.SKIN_NEGATIVE_MIN_CONF >= s.SKIN_SYNTHETIC_MIN_CONF
+    # الفحص التشريحي على Person موثوق بس
+    assert 0.2 <= s.SKIN_MIN_PERSON_CONF <= 0.6
+    # إسقاط الموجب صارم: الهوريستيك لازم يكون أقوى من سقف الموجب المسموح إسقاطه
+    assert s.SKIN_POSITIVE_OVERRIDE_MIN_CONF > s.SKIN_POSITIVE_OVERRIDE_MAX_CONF
+    # لوج SQL مقفول افتراضيًا (كان بيطبع كل استعلام مرتين في dev)
+    assert s.DB_SQL_ECHO is False
 
 
 def test_hybrid_can_be_disabled_by_env(monkeypatch):

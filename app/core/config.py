@@ -23,6 +23,9 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./ppe_detection.db"
+    # طباعة استعلامات SQL في اللوج (echo). مفعّلة كانت بتطبع كل statement مرتين
+    # (handler الـ echo + root logger) وبتغرق اللوج — لذلك الافتراضي مقفول.
+    DB_SQL_ECHO: bool = False
 
     # JWT Auth
     JWT_SECRET: str = "CHANGE_ME_SUPER_SECRET"
@@ -39,15 +42,21 @@ class Settings(BaseSettings):
 
     # Construction Model
     CONSTRUCTION_MODEL_PATH: str = "Model/ppe.pt"
-    CONSTRUCTION_DETECTION_CONFIDENCE: float = 0.10
-    CONSTRUCTION_DEFAULT_CLASS_CONF: float = 0.25
+    CONSTRUCTION_DETECTION_CONFIDENCE: float = 0.25
+    CONSTRUCTION_DEFAULT_CLASS_CONF: float = 0.35
     CONSTRUCTION_CLASS_CONF_THRESHOLDS: str = ""
 
     # Medical Model
     MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel.pt"
-    MEDICAL_DETECTION_CONFIDENCE: float = 0.15
-    MEDICAL_DEFAULT_CLASS_CONF: float = 0.30
+    MEDICAL_DETECTION_CONFIDENCE: float = 0.25
+    MEDICAL_DEFAULT_CLASS_CONF: float = 0.35
     MEDICAL_CLASS_CONF_THRESHOLDS: str = ""
+
+    # أرضية ثقة دنيا (Precision floor): أي عتبة إنتاج كشف أقل منها بتترفع
+    # تلقائيًا (global conf + per-class conf). قيم منخفضة أوي زي 0.05/0.10
+    # بتنتج كشوف وهمية كتير (اللي ظهر في اللوج: Person بـ 0.26 يتقلب كل فريم
+    # و NO-Mask صناعي بثقة 0.96) — فبنعمل حاجز أدنى للحفاظ على الدقة العالية.
+    DETECTION_CONFIDENCE_FLOOR: float = 0.25
 
     # Hybrid detector (Medical + Construction models fused on one frame)
     HYBRID_DETECTION_ENABLED: bool = True
@@ -73,6 +82,19 @@ class Settings(BaseSettings):
     SKIN_EYE_BRIDGE_MIN_SKIN_RATIO: float = 0.22
     SKIN_GLASS_CONFIRM_MIN_RATIO: float = 0.05
     SKIN_SYNTHETIC_MIN_CONF: float = 0.45
+    # ── حراس الدقة (Precision guards) — من إصلاح مشكلة اللوج ──
+    # سقف ثقة الكشوف الصناعية (skin:*): الهوريستيك مش موديل — مينفعش يدّعي ثقة 0.96
+    SKIN_SYNTHETIC_MAX_CONF: float = 0.85
+    # أقل ثقة يعدها الـ checker دليل مخالفة لكشف سالب مصدره الجلد.
+    # تحتها: الكشف بيتعرض على البث بس مبيسجلش مخالفة.
+    SKIN_NEGATIVE_MIN_CONF: float = 0.70
+    # الفحوصات التشريحية (فم/جسر عينين/مسح يدين) مبتشتغلش على Person ضعيف
+    # (كان بيحصل على Person بـ 0.26 وبيطلع NO-Mask/NO-Gloves وهمي كل فريم)
+    SKIN_MIN_PERSON_CONF: float = 0.35
+    # إسقاط فئة موجبة (Mask/Gloves/Goggles) بالجلد بيبقى أشد قيود:
+    # الموجبة مينفعش تتباش عن 0.60، والهوريستيك لازم يكون واثق ≥ 0.70
+    SKIN_POSITIVE_OVERRIDE_MAX_CONF: float = 0.60
+    SKIN_POSITIVE_OVERRIDE_MIN_CONF: float = 0.70
 
     # Violation frames storage
     FRAMES_DIR: str = "violation_frames"

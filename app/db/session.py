@@ -9,7 +9,10 @@ from app.core.config import settings
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=settings.APP_ENV == "dev",
+    # echo=False افتراضيًا: كان كل استعلام يتطبع مرتين (handler الـ echo +
+    # propagation للـ root logger) وبيغرق اللوج. فعّلها بـ DB_SQL_ECHO=true
+    # لو محتاج تشخّص استعلامات SQL.
+    echo=settings.DB_SQL_ECHO,
     future=True,
 )
 

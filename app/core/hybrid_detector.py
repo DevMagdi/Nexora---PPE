@@ -33,7 +33,12 @@ import numpy as np
 from app.core.config import settings
 from app.core.detector import CLASS_COLORS_BY_NAME, Detection, PPEDetector, is_skin_source
 from app.core.logging import get_logger
-from app.core.ppe import Profile, canonical_class_name, class_key
+from app.core.ppe import (
+    CONSTRUCTION_ONLY_CLASSES,
+    Profile,
+    canonical_class_name,
+    class_key,
+)
 from app.core.skin_analysis import (
     EyeBridgeResult,
     SkinStats,
@@ -63,19 +68,6 @@ OPPOSITE_CLASSES: tuple[tuple[str, str], ...] = (
 # الفئات اللي بيتحقق منها فلتر الجلد
 SKIN_CHECKED_CLASSES = ("NO-Mask", "Mask", "NO-Gloves", "Gloves", "NO-Goggles", "Goggles")
 
-# فئات إنشائية خالصة ملهاش معنى في البروفايل الطبي — الجسر الإنشائي بيشيلها
-# لما كاميرا طبية تستعين بالموديل الإنشائي (اللي بيوفر Person + القطع المشتركة)
-CONSTRUCTION_ONLY_CLASSES: frozenset[str] = frozenset(
-    {
-        "Hardhat",
-        "NO-Hardhat",
-        "Safety Vest",
-        "NO-Safety Vest",
-        "Safety Boots",
-        "NO-Safety Boots",
-    }
-)
-
 SYNTHETIC_CLASS_ID = -1
 SOURCE_MODEL = "model"
 SOURCE_EYE_BRIDGE = "skin:eye_bridge"
@@ -86,9 +78,6 @@ SOURCE_HAND = "skin:distance_transform"
 
 # أقصى عدد وشوش يفحصها الجسر التشريحي في الفريم الواحد (تحديد تكلفة)
 ANATOMICAL_BRIDGE_MAX_FACES = 4
-
-# لو الموديل واثق بشكل كبير جدًا في الفئة الموجبة، منقلبهاش إلا بدليل أقوى
-POSITIVE_OVERRIDE_MAX_CONF = 0.75
 
 
 @dataclass(frozen=True)
@@ -110,6 +99,12 @@ class HybridConfig:
     eye_bridge_min_skin_ratio: float = 0.22
     glass_confirm_min_ratio: float = 0.05
     synthetic_min_conf: float = 0.45
+    # ── حراس الدقة (Precision guards) ──
+    synthetic_max_conf: float = 0.85
+    skin_negative_min_conf: float = 0.70
+    skin_min_person_conf: float = 0.35
+    positive_override_max_conf: float = 0.60
+    positive_override_min_conf: float = 0.70
 
     @classmethod
     def from_settings(cls, s=settings) -> HybridConfig:
@@ -129,6 +124,11 @@ class HybridConfig:
             eye_bridge_min_skin_ratio=s.SKIN_EYE_BRIDGE_MIN_SKIN_RATIO,
             glass_confirm_min_ratio=s.SKIN_GLASS_CONFIRM_MIN_RATIO,
             synthetic_min_conf=s.SKIN_SYNTHETIC_MIN_CONF,
+            synthetic_max_conf=s.SKIN_SYNTHETIC_MAX_CONF,
+            skin_negative_min_conf=s.SKIN_NEGATIVE_MIN_CONF,
+            skin_min_person_conf=s.SKIN_MIN_PERSON_CONF,
+            positive_override_max_conf=s.SKIN_POSITIVE_OVERRIDE_MAX_CONF,
+            positive_override_min_conf=s.SKIN_POSITIVE_OVERRIDE_MIN_CONF,
         )
 
 
@@ -325,6 +325,13 @@ class HybridPPEDetector:
         if self.config.skin_filter_enabled and frame is not None:
             merged = self._apply_skin_heuristics(frame, merged, stats)
 
+        if profile == "medical":
+            # فايروول نهائي: كاميرا طبي مينفعش على الإطلاق تطلّع فئة إنشائية
+            # (خوذة/فيست/بوت) من أي مصدر كان — الجسر الإنشائي بينظّف مخرجات
+            # الموديل الإنشائي، وده بيضمن إن أي مسار تاني (فلاتر، دمج، مستقبلًا)
+            # متقدرش تعدي كاميرا طبية بكشف إنشائي.
+            merged = [d for d in merged if canonical_class_name(d.class_name) not in CONSTRUCTION_ONLY_CLASSES]
+
         stats.merged = len(merged)
         stats.synthetic = sum(1 for d in merged if d.class_id == SYNTHETIC_CLASS_ID)
         self.last_stats = stats
@@ -484,15 +491,37 @@ class HybridPPEDetector:
         return removed
 
     def _skin_confidence(self, base: float) -> float:
-        return float(round(max(self.config.synthetic_min_conf, min(0.95, base)), 4))
+        """
+        ثقة معيارية للكشوف الصناعية: محصورة بين أرضية ``synthetic_min_conf``
+        وسقف ``synthetic_max_conf``.
+
+        السقف مهم للدقة: الهوريستيك (نسبة جلد / distanceTransform) مش موديل
+        مُدرَّب — مينفعش يطلع بثقة 0.96 زي ما ظهر في اللوج، لأن الثقة العالية
+        دي بتتحول لمخالفات مسجّلة وإنذارات على دليل ضعيف.
+        """
+        return float(
+            round(
+                max(self.config.synthetic_min_conf, min(self.config.synthetic_max_conf, base)),
+                4,
+            )
+        )
 
     def _apply_skin_heuristics(
         self, frame: np.ndarray, detections: list[Detection], stats: HybridStats
     ) -> list[Detection]:
-        persons = [d for d in detections if canonical_class_name(d.class_name) == "Person"]
+        # الفحوصات التشريحية (رأس/فم/يدين) محتاجة مرجع موثوق — Person ضعيف
+        # (تحت skin_min_person_conf) معناه مستطيل مش مضمون على حد شخص أصلاً،
+        # والفحص عليه بيطلع كشوف وهمية كل فريم (زي Person 0.26 في اللوج).
+        persons = [
+            d
+            for d in detections
+            if canonical_class_name(d.class_name) == "Person"
+            and d.confidence >= self.config.skin_min_person_conf
+        ]
         if not persons:
-            # مفيش Person في الكادر (كاميرا طبية والمساعد الإنشائي مقفول مثلًا) —
-            # الجسر التشريحي بيستخدم الكمامة المكتشفة كمرجع تشريحي لفحص خط العينين
+            # مفيش Person موثوق في الكادر (كاميرا طبية والمساعد الإنشائي مقفول
+            # مثلًا) — الجسر التشريحي بيستخدم الكمامة المكتشفة كمرجع تشريحي
+            # لفحص خط العينين (الكمامة نفسها عدّت عتبة فئتها بالفعل).
             if self.config.eye_bridge_enabled:
                 self._append_anatomical_eye_bridge(frame, detections, stats)
             return detections
@@ -545,8 +574,11 @@ class HybridPPEDetector:
         stats.eye_bridge_hits += 1
 
         # الوش مكشوف => لو فيه كشف نظارة ضعيف على نفس المنطقة نشيله
-        if confidence >= 0.55:
-            removed = self._drop(detections, "Goggles", head, max_conf=POSITIVE_OVERRIDE_MAX_CONF)
+        # (لازم الهوريستيك نفسه واثق بدرجة كافية كمان — positive_override_min_conf)
+        if confidence >= self.config.positive_override_min_conf:
+            removed = self._drop(
+                detections, "Goggles", head, max_conf=self.config.positive_override_max_conf
+            )
             if removed and det in detections:
                 det.confidence = self._skin_confidence(confidence + 0.05)
 
@@ -610,8 +642,10 @@ class HybridPPEDetector:
             stats.eye_bridge_hits += 1
 
             # الوش مكشوف => لو فيه كشف نظارة ضعيف على نفس المنطقة نشيله
-            if confidence >= 0.55:
-                removed = self._drop(detections, "Goggles", zone, max_conf=POSITIVE_OVERRIDE_MAX_CONF)
+            if confidence >= self.config.positive_override_min_conf:
+                removed = self._drop(
+                    detections, "Goggles", zone, max_conf=self.config.positive_override_max_conf
+                )
                 if removed and det in detections:
                     det.confidence = self._skin_confidence(confidence + 0.05)
 
@@ -626,7 +660,8 @@ class HybridPPEDetector:
         self, frame: np.ndarray, detections: list[Detection], head: tuple[int, int, int, int], stats: HybridStats
     ) -> None:
         """كشف جلد الأنف/الفم => ``NO-Mask``."""
-        if min(head[2] - head[0], head[3] - head[1]) < 16:
+        # منطقة أصغر من كده مش وش مقروء — أي "جلد" فيها ضوضاء (رقبة/خلفية)
+        if min(head[2] - head[0], head[3] - head[1]) < 24:
             return
 
         lower = lower_face_box(head, top=0.45)
@@ -640,13 +675,17 @@ class HybridPPEDetector:
 
         upper = max(self.config.skin_strong_ratio * 1.6, min(0.75, self.config.skin_strong_ratio * 2.2))
         confidence = self._skin_confidence(
-            0.52 + 0.45 * ratio_confidence(ratio, self.config.skin_strong_ratio, upper)
+            0.55 + 0.40 * ratio_confidence(ratio, self.config.skin_strong_ratio, upper)
         )
         det = self._upsert(detections, "NO-Mask", confidence, lower, SOURCE_MOUTH)
         stats.mouth_skin_hits += 1
 
-        if confidence >= 0.55:
-            removed = self._drop(detections, "Mask", lower, max_conf=POSITIVE_OVERRIDE_MAX_CONF)
+        # إسقاط كمامة موجبة محتاج دليل أقوى بكتير (كان 0.55 بيأسد كشف Mask
+        # لغاية 0.75 — ده كان بيقتل الكمامات الحقيقية ضعيفة الثقة)
+        if confidence >= self.config.positive_override_min_conf:
+            removed = self._drop(
+                detections, "Mask", lower, max_conf=self.config.positive_override_max_conf
+            )
             if removed and det in detections:
                 det.confidence = self._skin_confidence(confidence + 0.05)
 
@@ -712,9 +751,9 @@ class HybridPPEDetector:
             if (
                 hand.is_bare
                 and hand.skin_ratio >= self.config.glove_reject_ratio
-                and det.confidence <= POSITIVE_OVERRIDE_MAX_CONF
+                and det.confidence <= self.config.positive_override_max_conf
             ):
-                self._drop(detections, "Gloves", box, max_conf=POSITIVE_OVERRIDE_MAX_CONF)
+                self._drop(detections, "Gloves", box, max_conf=self.config.positive_override_max_conf)
                 self._upsert(
                     detections,
                     "NO-Gloves",
@@ -730,7 +769,8 @@ class HybridPPEDetector:
                     self.config.glove_reject_ratio,
                 )
 
-        # أي شخص مالوش أي دليل قفاز في الفريم → نمسح مناطق اليدين بأنفسنا
+        # أي شخص موثوق مالوش أي دليل قفاز في الفريم → نمسح مناطق اليدين بأنفسنا
+        # (persons هنا فعلاً عدّت فلتر skin_min_person_conf)
         for idx, person in enumerate(persons):
             if idx in associated:
                 continue
@@ -754,9 +794,11 @@ class HybridPPEDetector:
                 min_thickness=self.config.bare_hand_min_thickness,
                 min_area=self.config.bare_hand_min_area,
             )
-            if not hand.is_bare or hand.skin_ratio < self.config.skin_min_ratio:
+            if not hand.is_bare:
                 continue
-            if hand.skin_ratio < self.config.skin_strong_ratio and hand.confidence < 0.7:
+            # مسح اليدين بيطلع كشوف وهمية بسهولة (خلفية/رقبة/وش جوه المستطيل
+            # الجانبي) — لازم دليل قوي: جلد كثيف + ثقة تحليل كافية
+            if hand.skin_ratio < self.config.skin_strong_ratio or hand.confidence < 0.5:
                 continue
             score = hand.confidence * (0.5 + 0.5 * hand.skin_ratio)
             if best is None or score > best[0]:
@@ -769,7 +811,7 @@ class HybridPPEDetector:
         self._upsert(
             detections,
             "NO-Gloves",
-            self._skin_confidence(0.35 + 0.55 * score),
+            self._skin_confidence(0.45 + 0.45 * score),
             candidate,
             SOURCE_HAND,
         )
