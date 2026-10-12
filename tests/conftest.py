@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+# Imported first on purpose: importing the app package installs SQLAlchemy's
+# pure-Python fallback when an Application Control policy blocks the compiled
+# modules (see app/native_compat.py), so the `sqlalchemy` imports below — here and
+# in every test module — keep working on those machines.
+from app.native_compat import ensure_sqlalchemy_importable  # isort: skip
 
-import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+ensure_sqlalchemy_importable()
 
-from app.core.auth import create_access_token, hash_password, media_cookie_name
-from app.db.models import Base, User
-from app.db.session import get_db
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+
+import pytest  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+
+from app.core.auth import create_access_token, hash_password, media_cookie_name  # noqa: E402
+from app.db.models import Base, User  # noqa: E402
+from app.db.session import get_db  # noqa: E402
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 

@@ -7,6 +7,12 @@ cryptography>=42.0.0
 passlib>=1.7.4
 # >= 2.0.50: بيتعرّف على SQL Server 2025 (server version 17) — قبلها كان
 # بيطلع SAWarning "Unrecognized server version info '17.0.1000.7'" عند الإقلاع
+# ملاحظة 2.1.x: بيستورد وحدات Cython المترجمة (`*_cy.pyd`) من غير أي بديل، فعلى Windows
+# اللي فيه Application Control policy (WDAC / Smart App Control / AppLocker) الإقلاع كان بيقف بـ
+# "ImportError: DLL load failed while importing _row_cy". `app/native_compat.py` بيكتشف ده وبيحوّل
+# تلقائيًا لنسخ SQLAlchemy النقية (pure-Python)، و`python scripts/check_native_deps.py` بيشخّص
+# كل الوحدات المترجمة. لو عايز تتجنّبها من الأساس:
+#   pip install --force-reinstall --no-binary sqlalchemy "sqlalchemy>=2.0.50,<2.1"
 sqlalchemy>=2.0.50
 greenlet>=3.0.0
 aiosqlite>=0.20.0
