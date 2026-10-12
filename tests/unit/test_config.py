@@ -56,7 +56,17 @@ def test_hybrid_can_be_disabled_by_env(monkeypatch):
 
 
 def test_env_override(monkeypatch):
+    import secrets
+
     monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("JWT_SECRET", secrets.token_urlsafe(48))
+    monkeypatch.setenv("BOOTSTRAP_PASSWORD", "StrongPass!2026-FirstRun")
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", secrets.token_urlsafe(32))
+    monkeypatch.setenv("CORS_ORIGINS", "https://nexora.example")
+    monkeypatch.setenv("ALLOWED_HOSTS", "nexora.example")
+    monkeypatch.setenv("ALLOWED_RTSP_PREFIXES", "rtsp://192.168.10.")
+    monkeypatch.setenv("ALLOWED_VIDEO_DIR", "/var/nexora/videos")
+    monkeypatch.setenv("BACKUP_DIR", "/var/nexora/backups")
     monkeypatch.setenv("CONSTRUCTION_DETECTION_CONFIDENCE", "0.7")
     monkeypatch.setenv("ALERT_COOLDOWN_SECONDS", "30")
     s = Settings(_env_file=None)

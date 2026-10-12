@@ -10,13 +10,16 @@ export function getErrorMessage(error: unknown, fallback = "حدث خطأ غير
   if (axios.isAxiosError(error)) {
     const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail
     if (typeof detail === "string") return detail
+    if (detail && typeof detail === "object" && "message" in detail) {
+      const message = (detail as { message?: unknown }).message
+      if (typeof message === "string") return message
+    }
 
     if (error.response?.status === 401) {
-      // token غالبًا انتهى/غير صالح
-      try {
-        localStorage.removeItem("nexora-token")
-      } catch {}
-      return "غير مُسجّل الدخول أو انتهت الجلسة. من فضلك سجّل الدخول مرة أخرى."
+      return "بيانات الدخول غير صحيحة أو انتهت الجلسة. من فضلك سجّل الدخول مرة أخرى."
+    }
+    if (error.response?.status === 429) {
+      return "محاولات كثيرة؛ انتظر قليلاً ثم حاول مرة أخرى."
     }
     if (error.message) return error.message
   }

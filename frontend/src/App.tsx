@@ -18,7 +18,7 @@ import {
   useStopCamera,
   useViolations,
 } from "@/hooks/useNexora"
-import { clearToken, downloadViolationsCsv, getMjpegStreamUrl, getWebSocketUrl, resolveFrameUrl } from "@/lib/api"
+import { downloadViolationsCsv, getMjpegStreamUrl, getWebSocketUrl, logout, refreshMediaSession, resolveFrameUrl } from "@/lib/api"
 import nexoraLogoColor from "@/assets/logo/nexora-logo-full-color.svg"
 import nexoraLogoWhite from "@/assets/logo/nexora-logo-full-white.svg"
 import {
@@ -124,6 +124,12 @@ const SECTOR_LABEL: Record<string, string> = {
 const PROFILE_LABEL: Record<string, string> = {
   construction: "إنشاءات",
   medical: "طبي",
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  admin: "مدير",
+  operator: "مشغّل",
+  viewer: "مشاهد فقط",
 }
 
 const CORE_KEYWORDS = ["hardhat", "helmet", "vest", "mask", "glove", "cap", "goggle", "boot", "coat"]
@@ -717,12 +723,13 @@ interface LiveStageProps {
   status: LiveStatus
   compliance: number | undefined
   pending: boolean
+  canOperate: boolean
   onStart: () => void
   onStop: () => void
   onGoCameras: () => void
 }
 
-function LiveStage({ camera, metrics, status, compliance, pending, onStart, onStop, onGoCameras }: LiveStageProps) {
+function LiveStage({ camera, metrics, status, compliance, pending, canOperate, onStart, onStop, onGoCameras }: LiveStageProps) {
   const [errorKey, setErrorKey] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
 
@@ -752,18 +759,24 @@ function LiveStage({ camera, metrics, status, compliance, pending, onStart, onSt
       <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-b from-background to-card p-8 text-center">
         <WifiOff className="mb-4 size-16 text-destructive/20" />
         <h3 className="mb-2 text-xl font-bold">البث متوقف حاليًا</h3>
-        <p className="mb-6 max-w-sm text-sm text-muted-foreground">«{camera.name}» لا تعمل الآن. اضغط تشغيل لبدء البث والتحليل اللحظي.</p>
-        <button type="button" className="btn-cta" onClick={onStart} disabled={pending}>
-          {pending ? (
-            <>
-              <Loader2 className="size-4 animate-spin" /> جارٍ التشغيل...
-            </>
-          ) : (
-            <>
-              <Play className="size-4 fill-current" /> تشغيل البث الآن
-            </>
-          )}
-        </button>
+        <p className="mb-6 max-w-sm text-sm text-muted-foreground">
+          {canOperate
+            ? `«${camera.name}» لا تعمل الآن. يمكنك تشغيل البث والتحليل اللحظي.`
+            : `«${camera.name}» لا تعمل الآن. اطلب من مدير النظام تشغيلها.`}
+        </p>
+        {canOperate && (
+          <button type="button" className="btn-cta" onClick={onStart} disabled={pending}>
+            {pending ? (
+              <>
+                <Loader2 className="size-4 animate-spin" /> جارٍ التشغيل...
+              </>
+            ) : (
+              <>
+                <Play className="size-4 fill-current" /> تشغيل البث الآن
+              </>
+            )}
+          </button>
+        )}
       </div>
     )
   }
@@ -845,16 +858,18 @@ function LiveStage({ camera, metrics, status, compliance, pending, onStart, onSt
               </div>
             )}
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="destructive"
-            onClick={onStop}
-            disabled={pending}
-            className="gap-2 rounded-xl shadow-xl shadow-destructive/30"
-          >
-            {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Square size={14} fill="currentColor" />} إيقاف البث
-          </Button>
+          {canOperate && (
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              onClick={onStop}
+              disabled={pending}
+              className="gap-2 rounded-xl shadow-xl shadow-destructive/30"
+            >
+              {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Square size={14} fill="currentColor" />} إيقاف البث
+            </Button>
+          )}
         </div>
       </div>
     </>
@@ -865,6 +880,7 @@ interface CameraCardProps {
   camera: Camera
   ppeLabels: Map<string, string>
   allowStream: boolean
+  canOperate: boolean
   pending: boolean
   deletePending: boolean
   alerts: number
@@ -878,6 +894,7 @@ function CameraCard({
   camera,
   ppeLabels,
   allowStream,
+  canOperate,
   pending,
   deletePending,
   alerts,
@@ -948,25 +965,27 @@ function CameraCard({
           </div>
 
           <div className="mt-auto flex items-center justify-between gap-2 border-t border-border/40 pt-4">
-            <Button
-              type="button"
-              size="sm"
-              variant={camera.is_running ? "destructive" : "default"}
-              onClick={onToggle}
-              disabled={pending || deletePending}
-              className={`flex-1 gap-1.5 rounded-xl text-xs font-bold ${
-                !camera.is_running ? "bg-primary/12 text-primary hover:bg-primary hover:text-primary-foreground" : ""
-              }`}
-            >
-              {pending ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : camera.is_running ? (
-                <Square size={12} fill="currentColor" />
-              ) : (
-                <Play size={12} fill="currentColor" />
-              )}
-              {camera.is_running ? "إيقاف" : "تشغيل"}
-            </Button>
+            {canOperate && (
+              <Button
+                type="button"
+                size="sm"
+                variant={camera.is_running ? "destructive" : "default"}
+                onClick={onToggle}
+                disabled={pending || deletePending}
+                className={`flex-1 gap-1.5 rounded-xl text-xs font-bold ${
+                  !camera.is_running ? "bg-primary/12 text-primary hover:bg-primary hover:text-primary-foreground" : ""
+                }`}
+              >
+                {pending ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : camera.is_running ? (
+                  <Square size={12} fill="currentColor" />
+                ) : (
+                  <Play size={12} fill="currentColor" />
+                )}
+                {camera.is_running ? "إيقاف" : "تشغيل"}
+              </Button>
+            )}
 
             <Button
               type="button"
@@ -980,29 +999,33 @@ function CameraCard({
               <MonitorPlay size={16} />
             </Button>
 
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              aria-label={`تعديل ${camera.name}`}
-              onClick={onEdit}
-              disabled={deletePending}
-              className="shrink-0 rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <Pencil size={16} />
-            </Button>
+            {canOperate && (
+              <>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`تعديل ${camera.name}`}
+                  onClick={onEdit}
+                  disabled={deletePending}
+                  className="shrink-0 rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Pencil size={16} />
+                </Button>
 
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              aria-label={`حذف ${camera.name}`}
-              onClick={onDelete}
-              disabled={deletePending}
-              className="shrink-0 rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            >
-              {deletePending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 size={16} />}
-            </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`حذف ${camera.name}`}
+                  onClick={onDelete}
+                  disabled={deletePending}
+                  className="shrink-0 rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                >
+                  {deletePending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 size={16} />}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </Card>
@@ -1054,8 +1077,21 @@ export default function App() {
   const [toast, setToast] = useState<ToastState | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
+  const meUserId = meUser?.id
+  const mustChangePassword = meUser?.must_change_password
   const displayName = meUser?.username || "مستخدم Nexora"
-  const displayRole = SECTOR_LABEL[meUser?.sector ?? ""] || "حساب محلي"
+  const displayRole = meUser
+    ? `${ROLE_LABEL[meUser.role] ?? meUser.role} · ${SECTOR_LABEL[meUser.sector] ?? "حساب محلي"}`
+    : "حساب محلي"
+  const canOperate = meUser?.role === "admin" || meUser?.role === "operator"
+
+  useEffect(() => {
+    if (!meUserId || mustChangePassword) return
+    const renew = () => void refreshMediaSession().catch(() => undefined)
+    renew()
+    const id = window.setInterval(renew, 5 * 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [meUserId, mustChangePassword])
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000)
@@ -1180,13 +1216,7 @@ export default function App() {
   )
 
   const handleLogout = useCallback(() => {
-    clearToken()
-    try {
-      localStorage.removeItem("nexora-user")
-    } catch {
-      /* ignore */
-    }
-    window.location.assign("/")
+    void logout()
   }, [])
 
   const baseParams = useMemo(() => ({ page_size: VIOLATIONS_FETCH_LIMIT, from: iso(from), to: iso(to) }), [from, to])
@@ -1370,8 +1400,7 @@ export default function App() {
   ]
 
   const sidebarHidden = isMobile && !sidebarOpen
-  const detectorsOk = Boolean(health?.detectors_loaded ?? (health as { model_loaded?: boolean } | undefined)?.model_loaded)
-  const serverOk = detectorsOk && !healthError
+  const serverOk = health?.status === "ok" && !healthError
 
   const orderedCams = useMemo(() => [...cameraList].sort((a, b) => Number(b.is_running) - Number(a.is_running)), [cameraList])
   const previewAllowed = useMemo(() => {
@@ -1479,7 +1508,7 @@ export default function App() {
           {health && (
             <div className="space-y-2 text-[11px] text-muted-foreground">
               <div className="flex justify-between">
-                <span>موديل الذكاء الاصطناعي</span>
+                <span>واجهة النظام</span>
                 <span className={`font-semibold ${serverOk ? "text-foreground" : "text-destructive-foreground"}`}>{serverOk ? "يعمل" : "متوقف"}</span>
               </div>
               <div className="flex justify-between">
@@ -2025,6 +2054,7 @@ export default function App() {
                     status={activeLiveStatus}
                     compliance={compliance}
                     pending={camPending}
+                    canOperate={canOperate}
                     onStart={() => selectedCamera && toggleCamera(selectedCamera)}
                     onStop={() => selectedCamera && toggleCamera(selectedCamera)}
                     onGoCameras={() => setTab("cameras")}
@@ -2046,23 +2076,25 @@ export default function App() {
                   )}
                 </div>
 
-                <Dialog open={addOpen} onOpenChange={setAddOpen}>
-                  <button type="button" className="btn-cta" onClick={() => setAddOpen(true)}>
-                    <Plus className="size-4" /> إضافة كاميرا جديدة
-                  </button>
-                  <DialogContent className="max-w-lg rounded-2xl border-border bg-card">
-                    <DialogHeader>
-                      <DialogTitle className="font-bold text-foreground">ربط كاميرا جديدة بالنظام</DialogTitle>
-                      <DialogDescription>أدخل رابط المصدر واختر معدات الوقاية المطلوب رصدها.</DialogDescription>
-                    </DialogHeader>
-                    <AddCameraForm
-                      onSuccess={() => {
-                        setAddOpen(false)
-                        notify("success", "تمت إضافة الكاميرا بنجاح")
-                      }}
-                    />
-                  </DialogContent>
-                </Dialog>
+                {canOperate && (
+                  <Dialog open={addOpen} onOpenChange={setAddOpen}>
+                    <button type="button" className="btn-cta" onClick={() => setAddOpen(true)}>
+                      <Plus className="size-4" /> إضافة كاميرا جديدة
+                    </button>
+                    <DialogContent className="max-w-lg rounded-2xl border-border bg-card">
+                      <DialogHeader>
+                        <DialogTitle className="font-bold text-foreground">ربط كاميرا جديدة بالنظام</DialogTitle>
+                        <DialogDescription>أدخل رابط المصدر واختر معدات الوقاية المطلوب رصدها.</DialogDescription>
+                      </DialogHeader>
+                      <AddCameraForm
+                        onSuccess={() => {
+                          setAddOpen(false)
+                          notify("success", "تمت إضافة الكاميرا بنجاح")
+                        }}
+                      />
+                    </DialogContent>
+                  </Dialog>
+                )}
               </div>
 
               {camerasError && cameraList.length === 0 ? (
@@ -2085,11 +2117,11 @@ export default function App() {
                   icon={<CameraIcon className="size-6 text-primary" />}
                   title="ابدأ بربط أول كاميرا"
                   desc="أضف رابط RTSP أو مصدر فيديو، وسيبدأ النظام في رصد مخالفات معدات الوقاية تلقائيًا."
-                  action={
+                  action={canOperate ? (
                     <button type="button" className="btn-cta" onClick={() => setAddOpen(true)}>
                       <Plus className="size-4" /> أضف أول كاميرا خلال دقيقة
                     </button>
-                  }
+                  ) : undefined}
                 />
               ) : (
                 <div className="stagger grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -2099,6 +2131,7 @@ export default function App() {
                       camera={c}
                       ppeLabels={ppeLabels}
                       allowStream={previewAllowed.has(c.id)}
+                      canOperate={canOperate}
                       pending={togglingCamId === c.id}
                       deletePending={deletingCamId === c.id}
                       alerts={alertsByCam.get(c.id) ?? 0}
@@ -2308,17 +2341,19 @@ export default function App() {
                                   <Eye size={14} /> عرض
                                 </Button>
 
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={v.is_resolved || resolvePending}
-                                  onClick={() => resolveViolation(v)}
-                                  className="h-8 gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-success/10 hover:text-success-foreground disabled:opacity-50"
-                                >
-                                  {resolvePending ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck size={14} />}
-                                  {v.is_resolved ? "مُعالجة" : "تعليم كمعالجة"}
-                                </Button>
+                                {canOperate && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={v.is_resolved || resolvePending}
+                                    onClick={() => resolveViolation(v)}
+                                    className="h-8 gap-1.5 rounded-lg text-xs text-muted-foreground hover:bg-success/10 hover:text-success-foreground disabled:opacity-50"
+                                  >
+                                    {resolvePending ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck size={14} />}
+                                    {v.is_resolved ? "مُعالجة" : "تعليم كمعالجة"}
+                                  </Button>
+                                )}
                               </div>
                             </td>
                           </tr>

@@ -20,9 +20,10 @@ class RTSPSource(CameraSource):
         loop = asyncio.get_running_loop()
         self._cap = await loop.run_in_executor(None, cv2.VideoCapture, self.url)
         if not self._cap.isOpened():
-            logger.error("Cannot open RTSP stream: %s", self.url)
+            # Camera URLs can contain credentials or signed query values; never log them.
+            logger.error("Cannot open configured RTSP stream")
             return False
-        logger.info("RTSP stream opened: %s", self.url)
+        logger.info("Configured RTSP stream opened")
         return True
 
     async def read_frame(self) -> np.ndarray | None:

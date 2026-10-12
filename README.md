@@ -2,7 +2,7 @@
 
 **Nexora** is a full-stack, real-time Personal Protective Equipment (PPE) compliance monitoring platform built for **Construction Sites / Industrial Facilities** and **Medical / Healthcare Environments**.
 
-Nexora connects to existing cameras (**RTSP / IP cameras, Webcams, or Video Files**), runs real-time AI detection using dedicated **Ultralytics YOLO** models per sector, streams annotated MJPEG feeds and live WebSocket telemetry to an Arabic RTL React dashboard, and dispatches instant alerts via **Database, Email (SMTP), Slack, and Webhooks**.
+Nexora runs as a self-contained on-premise installation, connects to existing cameras (**RTSP / IP cameras, Webcams, or Video Files**), runs real-time AI detection using dedicated **Ultralytics YOLO** models per sector, and serves an Arabic RTL React dashboard with annotated video and WebSocket telemetry. Alerts are stored locally by default; optional SMTP/HTTP integrations are customer-configured and not required for operation.
 
 ![Nexora Dashboard](Visuals/ppe-public-view.png)
 
@@ -26,11 +26,12 @@ Nexora connects to existing cameras (**RTSP / IP cameras, Webcams, or Video File
   - Every produced/fused detection is tagged (`model:medical+skin:eye_bridge`, …) and drawn with a `[skin]` marker in the live stream, and `skin_hits` is published in the WebSocket counts.
 - **Per-Camera Custom Monitoring Rules:** Configure which PPE items are required on each camera independently and update rules on the fly without restarting the stream.
   - **Rule-Synced Display (`_filter_detections_for_display`):** The annotated stream draws exactly what the camera actually checks — `Person` (for context) plus the enabled classes only, including skin-generated detections. Disabled classes never appear on the video or the on-screen stat lines, even if a model detects them (WebSocket telemetry still carries the full picture).
-- **Role/Sector Access Control (JWT Auth):** Users can be scoped to `construction`, `medical`, or `both` (general administration), isolating cameras, streams, frames, and violation exports by sector.
+- **Role/Sector Access Control:** `admin`, `operator`, and `viewer` roles with construction/medical sector isolation on cameras, streams, frames, violations, user administration, and metrics. Viewers are read-only; admin promotion is reserved for the local CLI.
+- **On-Prem Security:** Secure-by-default network camera/video allowlists, explicit production secrets and HTTPS-only startup, exact CORS/host allowlists, HttpOnly/Secure/SameSite cookies, short-lived media sessions, login throttling/account lockout, first-login password rotation, audit events, and AES-256-GCM encrypted PostgreSQL backups.
 - **Live Streaming & Telemetry:**
   - Authenticated **MJPEG** video streaming (`/api/v1/stream/{camera_id}`) with frame-sequence deduplication.
   - Real-time **WebSocket** live detection counters (`/api/v1/ws/{camera_id}`).
-- **Multi-Channel Alert Dispatcher:** Parallel, fault-isolated alert delivery to Database (`violations` + `alert_log`), SMTP Email (with violation frame attachment), Slack Webhook, and Generic HTTP Webhook.
+- **Multi-Channel Alert Dispatcher:** Local Database (`violations` + `alert_log`) delivery is built in; optional SMTP and HTTP/webhook integrations can target customer-approved services and are not needed for on-prem operation.
 - **Modern RTL Arabic Dashboard:** Built with **React 19, TypeScript, Tailwind CSS v4, Radix UI, TanStack Query, and Recharts**, featuring dark/light themes, live compliance rings, time-series analytics, camera management, and CSV export.
 
 ---
@@ -78,10 +79,10 @@ pip install -r requirements.txt
 # 3. Copy environment configuration
 cp .env.example .env
 
-# 4. Run database migrations (optional — tables are also auto-created on startup)
-alembic upgrade head
+# 4. Set a local camera/video allowlist in .env when you use those sources.
+#    Keep ALLOWED_RTSP_PREFIXES empty to disable all network camera sources.
 
-# 5. Start the API server with hot-reload
+# 5. Start the API server with hot-reload (versioned migrations run before serving)
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -96,8 +97,8 @@ npm install
 npm run dev
 ```
 
-- Open `http://localhost:5173` (Vite proxies `/api` and `/frames` to `http://127.0.0.1:8000`, including WebSockets).
-- Default bootstrap credentials (configurable in `.env`): `admin` / `admin123`.
+- Open `http://localhost:5173` (Vite proxies `/api` and `/frames` to the API, including WebSockets).
+- There are no default credentials. In development only, when no bootstrap password is configured, the server generates a random one and prints it once at startup. The account must change it at first sign-in.
 
 ---
 
@@ -105,32 +106,37 @@ npm run dev
 
 #### Option A: Docker Compose (Recommended)
 
-The production `docker/Dockerfile` uses a multi-stage build that compiles the React frontend (`frontend/dist`) and serves both the UI and API from FastAPI alongside PostgreSQL 16:
+The production stack builds the React SPA, FastAPI API, PostgreSQL, and a Caddy HTTPS reverse proxy (Docker Compose plugin v2.33+). App and DB ports are not published to the LAN; only the HTTPS proxy is exposed. Each customer site should have a separate installation/database.
 
 ```bash
-cp .env.example .env
-# Edit .env and set strong values for JWT_SECRET and BOOTSTRAP_PASSWORD
+python scripts/setup_onprem.py \
+  --host nexora.customer.lan \
+  --rtsp-prefix rtsp://192.168.10. \
+  --rtsp-prefix rtsp://10.10.0.
+# Review the generated .env and replace the sample camera ranges with the real camera VLANs.
 docker compose up --build -d
 ```
 
-Then open `http://localhost:8000`.
+Browse to `https://nexora.customer.lan`. Caddy uses an internal CA by default; export its **public root certificate only** with `docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt certs/nexora-root.crt` and distribute it to approved devices, or install an organization-trusted certificate. Check that the default Docker subnets `172.30.100.0/24` and `172.30.101.0/24` do not overlap customer/VPN routes; select alternatives with `--edge-subnet` and `--data-subnet` during setup if needed. The API container also joins a camera-facing bridge so it can reach site cameras; filter host/container egress to approved camera networks and deny public egress. The isolated Caddy/API and API/DB networks restrict paths and trust to the pinned Caddy address. Restrict published ports 80/443 with the customer firewall/VPN; do not publish port `8000` or PostgreSQL.
 
-For development with Docker (hot-reloading Backend on `:8000` + Vite Dev Server on `:5173`):
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-```
-
-#### Option B: Unified Bare-Metal Production Server
-
-If you build the frontend once (`cd frontend && npm run build`), FastAPI automatically detects `frontend/dist` and serves the full React SPA and API on port `8000`:
+There are no default production secrets or user accounts. The setup command generates a unique JWT key, bootstrap password, PostgreSQL password, and backup encryption key. The `admin` password is shown once and must be changed at first login. After payment is confirmed manually, issue an account locally:
 
 ```bash
-cd frontend && npm ci && npm run build && cd ..
-APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+docker compose exec app python -m app.cli create-user \
+  --username customer1 --sector construction --role viewer
 ```
 
-*(Note: Use `--workers 1` when running `CameraManager` in-process so camera tasks and WebSocket state are managed by a single coordinator process).*
+The CLI displays a temporary password once. Deliver it privately. There is no cloud payment check or self-signup; if the seller must retain control of issuance, do not give the customer the `admin` account. See [On-Prem Security & Operations](docs/ON_PREM_SECURITY_AR.md) for account lifecycle, camera allowlists, TLS trust, encrypted backup/restore, and limitations.
+
+For development with Docker, use the independent `docker-compose.dev.yml` stack:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+#### Bare-Metal Production
+
+Bare-metal deployments must meet the same requirements as Compose: explicit random secrets, `APP_ENV=prod`, exact HTTPS CORS/host allowlists, RTSP and video-path allowlists, PostgreSQL migrations, a trusted HTTPS reverse proxy, one API worker, firewall rules, and encrypted backups. See [On-Prem Security & Operations](docs/ON_PREM_SECURITY_AR.md); do not launch production on an exposed plain-HTTP Uvicorn port.
 
 ---
 
@@ -140,10 +146,18 @@ APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 | :--- | :--- | :--- |
 | `APP_ENV` | `dev` | Environment mode (`dev`, `staging`, `prod`) |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./ppe_detection.db` | Async SQLAlchemy connection URL (`sqlite+aiosqlite`, `postgresql+asyncpg`, `mssql+aioodbc`) |
-| `JWT_SECRET` | `CHANGE_ME_SUPER_SECRET` | Secret key used to sign JWT access tokens |
-| `BOOTSTRAP_USERNAME` | `admin` | Initial admin username created when `users` table is empty |
-| `BOOTSTRAP_PASSWORD` | `admin123` | Initial admin password |
-| `BOOTSTRAP_SECTOR` | `construction` | Initial user sector (`construction`, `medical`, `both`) |
+| `JWT_SECRET` | Random development-only key | Production requires an explicitly configured high-entropy secret (generated by `scripts/setup_onprem.py`) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `240` | Production allows 60–480 minutes; user must sign in again at expiry |
+| `MEDIA_TOKEN_EXPIRE_MINUTES` | `10` | Short-lived media-only token cookie; production allows 5–15 minutes |
+| `BOOTSTRAP_USERNAME` | `admin` | Initial local administrator created only when the user table is empty |
+| `BOOTSTRAP_PASSWORD` | Random development-only password | Production requires a strong explicit password; force-changed on first sign-in |
+| `BOOTSTRAP_SECTOR` | `both` | Initial admin sector (`construction`, `medical`, `both`) |
+| `CORS_ORIGINS` / `ALLOWED_HOSTS` | Local Vite origins / `*` in dev | Exact customer HTTPS origin and hostname; wildcard is rejected in production |
+| `ALLOWED_RTSP_PREFIXES` | Empty (network camera sources denied) | Comma-separated site camera ranges/origins; required in production |
+| `ALLOWED_VIDEO_DIR` | Empty (file sources denied) | Dedicated directory inside the app/container; required in production |
+| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login attempts per client IP and rolling window |
+| `LOGIN_LOCKOUT_ATTEMPTS` / `LOGIN_LOCKOUT_MINUTES` | `5` / `15` | Persistent temporary user lock after repeated failures |
+| `BACKUP_ENCRYPTION_KEY` | Empty | Explicit URL-safe 256-bit key required in production for AES-GCM database backups |
 | `CONSTRUCTION_MODEL_PATH` | `Model/ppe.pt` | Path to YOLO weights for construction cameras |
 | `MEDICAL_MODEL_PATH` | `Model/bestMedicalModel.pt` | Path to YOLO weights for medical cameras |
 | `HYBRID_DETECTION_ENABLED` | `true` | Fuse the construction + medical models in one `HybridPPEDetector` per camera profile |
@@ -170,8 +184,9 @@ APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 | `ALERT_COOLDOWN_SECONDS` | `60` | Minimum seconds between repeated alerts for the same PPE type per camera |
 | `VIOLATION_PERSIST_SECONDS` | `8` | Seconds a construction PPE violation must persist before triggering an alert |
 | `MEDICAL_VIOLATION_PERSIST_SECONDS` | `3` | Seconds a medical PPE violation must persist before triggering an alert |
-| `ALLOWED_RTSP_PREFIXES` | *(empty)* | Comma-separated allowlist of RTSP prefixes (e.g. `rtsp://192.168.1.`) |
-| `ALLOWED_VIDEO_DIR` | *(empty)* | Restrict `file` camera sources to paths inside this directory |
+| `ALLOWED_RTSP_PREFIXES` | *(empty; denies RTSP)* | Comma-separated site camera prefixes; matching includes scheme and hostname, not raw string prefix |
+| `ALLOWED_VIDEO_DIR` | *(empty; denies files)* | Required isolated directory; file sources and symlinks are resolved/confined inside it |
+| `TRUSTED_PROXIES` | Empty | Only these proxy IP/CIDRs may supply trusted `X-Forwarded-For` values |
 | `SENDER_EMAIL` / `RECEIVER_EMAIL` / `EMAIL_PASSWORD` | *(empty)* | SMTP credentials for email alerts |
 | `SLACK_WEBHOOK_URL` / `WEBHOOK_URL` | *(empty)* | Optional Slack or generic HTTP webhook URLs |
 
@@ -280,14 +295,17 @@ pytest tests/unit/test_skin_analysis.py tests/unit/test_hybrid_detector.py \
 ## Testing & Code Quality
 
 ```bash
-# Backend Linting (Ruff)
-ruff check app tests migrations train.py
+# Backend lint and unit/integration coverage
+ruff check app tests migrations scripts train.py
+pytest --cov=app --cov-report=term-missing
 
-# Backend Unit & Integration Tests (Pytest)
-pytest
-
-# Frontend Linting (Oxlint) & Production Build Check (TypeScript + Vite)
+# Dependency audits (run from an isolated maintenance environment)
+pip-audit -r requirements/prod.txt
 cd frontend
+npm ci
+npm audit
+
+# Frontend lint and production build
 npm run lint
 npm run build
 ```

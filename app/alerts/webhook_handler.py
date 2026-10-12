@@ -31,10 +31,11 @@ class WebhookHandler(AlertHandler):
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(self.url, json=payload)
                 resp.raise_for_status()
-            logger.info("Webhook alert sent to %s", self.url)
+            logger.info("Webhook alert sent")
             return True
         except Exception as exc:
-            logger.error("Webhook alert failed: %s", exc)
+            # Exception strings may embed secret webhook URLs or signed query values.
+            logger.error("Webhook alert failed (%s)", type(exc).__name__)
             return False
 
 
@@ -61,5 +62,5 @@ class SlackWebhookHandler(AlertHandler):
             logger.info("Slack alert sent for camera %d", violation.camera_id)
             return True
         except Exception as exc:
-            logger.error("Slack webhook alert failed: %s", exc)
+            logger.error("Slack webhook alert failed (%s)", type(exc).__name__)
             return False

@@ -2,8 +2,9 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 pydantic-settings>=2.3.0
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+PyJWT[crypto]>=2.10.1
+cryptography>=42.0.0
+passlib>=1.7.4
 # >= 2.0.50: بيتعرّف على SQL Server 2025 (server version 17) — قبلها كان
 # بيطلع SAWarning "Unrecognized server version info '17.0.1000.7'" عند الإقلاع
 sqlalchemy>=2.0.50

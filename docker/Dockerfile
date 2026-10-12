@@ -31,11 +31,10 @@ COPY Model/ppe.pt Model/bestMedicalModel.pt Model/
 # Copy built React SPA from Stage 1
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
-# Violation frames volume directory
-RUN mkdir -p violation_frames
-
-# Run as non-root user
-RUN useradd -u 1000 -m appuser && chown -R appuser:appuser /app
+# Runtime storage owned by the non-root app user; production mounts named volumes here.
+RUN mkdir -p /app/violation_frames /var/nexora/backups /var/nexora/videos \
+    && useradd -u 1000 -m appuser \
+    && chown -R appuser:appuser /app /var/nexora
 USER appuser
 
 EXPOSE 8000

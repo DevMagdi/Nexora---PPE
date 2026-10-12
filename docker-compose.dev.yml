@@ -1,9 +1,11 @@
-# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Local development only. This stack is independent of the locked-down on-prem production compose.
 services:
   app:
     build:
       context: .
       dockerfile: docker/Dockerfile.dev
+    ports:
+      - "8000:8000"
     environment:
       APP_ENV: dev
       DATABASE_URL: sqlite+aiosqlite:///./ppe_detection.db
@@ -13,9 +15,9 @@ services:
     volumes:
       - ./app:/app/app
       - ./Model:/app/Model
-    # Webcam passthrough (Linux only)
-    # devices:
-    #   - /dev/video0:/dev/video0
+      - ./violation_frames:/app/violation_frames
+    security_opt:
+      - no-new-privileges:true
 
   frontend:
     image: node:22-alpine

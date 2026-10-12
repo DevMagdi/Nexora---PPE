@@ -7,12 +7,11 @@ import {
   getCameras,
   getHealth,
   getPPEClassesMeta,
-  getToken,
   getViolations,
   login,
   me,
   resolveViolation,
-  setToken,
+  changePassword,
   startCamera,
   stopCamera,
   updateCamera,
@@ -22,7 +21,6 @@ export function useMe() {
   return useQuery({
     queryKey: ["me"],
     queryFn: me,
-    enabled: Boolean(getToken()),
     retry: false,
     staleTime: 30_000,
   })
@@ -32,15 +30,24 @@ export function useLogin() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (vars: { username: string; password: string }) => {
-      const res = await login(vars.username, vars.password)
-      setToken(res.access_token)
-      return res
+      return await login(vars.username, vars.password)
     },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] })
       await qc.invalidateQueries({ queryKey: ["cameras"] })
       await qc.invalidateQueries({ queryKey: ["ppe-meta"] })
       await qc.invalidateQueries({ queryKey: ["health"] })
+    },
+  })
+}
+
+export function useChangePassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (vars: { currentPassword: string; newPassword: string }) =>
+      changePassword(vars.currentPassword, vars.newPassword),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["me"] })
     },
   })
 }

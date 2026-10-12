@@ -30,7 +30,7 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
 
   const [name, setName] = useState(camera?.name ?? "")
   const [sourceType, setSourceType] = useState<CameraSourceType>(camera?.source_type ?? "rtsp")
-  const [sourceUri, setSourceUri] = useState(camera?.source_uri ?? "")
+  const [sourceUri, setSourceUri] = useState(mode === "edit" ? "" : camera?.source_uri ?? "")
   const [enabled, setEnabled] = useState<string[]>(camera?.enabled_classes ?? [])
   const [error, setError] = useState<string | null>(null)
 
@@ -60,10 +60,11 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
   )
 
   const placeholder = useMemo(() => {
+    if (isEdit) return "اتركه فارغًا للإبقاء على المصدر الحالي؛ أدخل مصدرًا جديدًا عند التغيير"
     if (sourceType === "webcam") return "Webcam index مثل: 0 أو 1"
     if (sourceType === "rtsp") return "rtsp://user:pass@ip:554/..."
-    return "مسار ملف فيديو مثل: C:\\videos\\test.mp4"
-  }, [sourceType])
+    return "مسار ملف فيديو داخل مجلد الفيديو المسموح"
+  }, [isEdit, sourceType])
 
   useEffect(() => {
     if (isEdit) return
@@ -92,7 +93,7 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
     e.preventDefault()
     setError(null)
 
-    if (sourceType === "webcam" && !/^\d+$/.test(sourceUri.trim())) {
+    if (sourceType === "webcam" && sourceUri.trim() && !/^\d+$/.test(sourceUri.trim())) {
       setError("بالنسبة للـ Webcam لازم تكتب رقم index مثل 0 أو 1.")
       return
     }
@@ -106,7 +107,7 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
           id: camera.id,
           payload: {
             name: name.trim(),
-            source_uri: sourceUri.trim(),
+            ...(sourceUri.trim() ? { source_uri: sourceUri.trim() } : {}),
             enabled_classes: finalEnabled,
           },
         })
@@ -169,7 +170,7 @@ export default function AddCameraForm({ mode = "create", camera, onSuccess }: Pr
             value={sourceUri}
             onChange={(e) => setSourceUri(e.target.value)}
             placeholder={placeholder}
-            required
+            required={!isEdit}
           />
 
           <div className="pt-2">

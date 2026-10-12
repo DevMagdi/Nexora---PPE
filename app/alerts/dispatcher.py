@@ -31,7 +31,7 @@ class AlertDispatcher:
         )
         for handler, result in zip(self.handlers, results, strict=False):
             if isinstance(result, Exception):
-                logger.error("Handler %s raised: %s", handler.handler_type, result)
+                logger.error("Handler %s raised (%s)", handler.handler_type, type(result).__name__)
 
     async def _run(self, handler: AlertHandler, violation: ViolationEvent) -> bool:
         error_msg: str | None = None
@@ -42,8 +42,8 @@ class AlertDispatcher:
                 logger.warning("Handler %s reported failure", handler.handler_type)
         except Exception as exc:
             success = False
-            error_msg = str(exc)
-            logger.exception("Handler %s exception: %s", handler.handler_type, exc)
+            error_msg = f"Handler raised {type(exc).__name__}"
+            logger.error("Handler %s raised (%s)", handler.handler_type, type(exc).__name__)
 
         await record_alert_log(
             violation_id=violation.violation_id,

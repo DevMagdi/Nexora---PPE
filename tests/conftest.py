@@ -6,7 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.auth import create_access_token, hash_password
+from app.core.auth import create_access_token, hash_password, media_cookie_name
 from app.db.models import Base, User
 from app.db.session import get_db
 
@@ -39,6 +39,9 @@ async def test_user(db_session: AsyncSession) -> User:
         username="admin",
         password_hash=hash_password("admin123"),
         sector="both",
+        role="admin",
+        is_active=True,
+        must_change_password=False,
     )
     db_session.add(user)
     await db_session.commit()
@@ -79,13 +82,17 @@ async def test_client(db_session: AsyncSession, test_user: User):
     }
     app.state.camera_manager = mock_manager
 
-    token = create_access_token(sub=str(test_user.id))
+    token = create_access_token(sub=str(test_user.id), token_version=test_user.token_version)
+    media_token = create_access_token(
+        sub=str(test_user.id), token_type="media", token_version=test_user.token_version
+    )
     headers = {"Authorization": f"Bearer {token}"}
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
         headers=headers,
+        cookies={media_cookie_name(): media_token},
     ) as client:
         yield client
 

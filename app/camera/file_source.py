@@ -21,9 +21,9 @@ class FileSource(CameraSource):
         loop = asyncio.get_running_loop()
         self._cap = await loop.run_in_executor(None, cv2.VideoCapture, self.path)
         if not self._cap.isOpened():
-            logger.error("Cannot open video file: %s", self.path)
+            logger.error("Cannot open configured video file")
             return False
-        logger.info("Video file opened: %s", self.path)
+        logger.info("Configured video file opened")
         return True
 
     async def read_frame(self) -> np.ndarray | None:
