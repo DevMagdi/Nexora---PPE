@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -22,21 +23,61 @@ router = APIRouter(tags=["stream"])
 MEDIA_SESSION_REVALIDATE_SECONDS = 5.0
 
 
+_LOOPBACK_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
+
+
+def _origin_parts(origin: str) -> tuple[str, str]:
+    """Return ``(scheme, hostname)`` for a browser Origin header value."""
+    try:
+        parsed = urlsplit(origin)
+        # ``.port`` raises ValueError for malformed ports such as
+        # ``localhost:8000.attacker.invalid``; such origins are rejected.
+        _ = parsed.port
+    except ValueError:
+        return "", ""
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname.startswith("[") and hostname.endswith("]"):
+        hostname = hostname[1:-1]
+    return parsed.scheme.strip().lower(), hostname
+
+
+def _host_header_hostname(websocket: WebSocket) -> str:
+    """Hostname portion of the Host header, tolerating ports and IPv6 brackets."""
+    raw = websocket.headers.get("host", "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith("["):
+        end = raw.find("]")
+        return raw[1:end] if end != -1 else raw.strip("[]")
+    if raw.count(":") == 1:
+        return raw.rsplit(":", 1)[0]
+    return raw
+
+
 def _websocket_origin_is_allowed(websocket: WebSocket, origin: str) -> bool:
     normalized_origin = origin.rstrip("/").lower()
     if normalized_origin in {value.rstrip("/").lower() for value in settings.cors_origins}:
         return True
 
+    scheme, origin_host = _origin_parts(normalized_origin)
+    if scheme not in {"http", "https"} or not origin_host:
+        return False
+
+    request_host = _host_header_hostname(websocket)
+    if not request_host:
+        return False
+
     # A dashboard served by FastAPI (rather than Vite) is same-origin with the
-    # API and should not need to duplicate its own URL in CORS_ORIGINS. The
-    # browser's Origin still has to match the request Host exactly.
-    forwarded_proto = websocket.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
-    if forwarded_proto in {"http", "https"}:
-        scheme = forwarded_proto
-    else:
-        scheme = {"ws": "http", "wss": "https"}.get(websocket.url.scheme.lower(), "")
-    host = websocket.headers.get("host", "").strip().lower()
-    return bool(scheme and host and normalized_origin == f"{scheme}://{host}")
+    # API and should not need to duplicate its own URL in CORS_ORIGINS.
+    if origin_host == request_host:
+        return True
+
+    # The dashboard is routinely opened through a different loopback alias
+    # than the one the browser resolves for the API host (page on
+    # http://localhost:8000 connecting to ws://127.0.0.1:8000, or vice versa).
+    # Both names refer to the same machine, so they share the same trust
+    # level; cross-site origins still fail the hostname comparison above.
+    return origin_host in _LOOPBACK_HOSTNAMES and request_host in _LOOPBACK_HOSTNAMES
 
 
 async def _media_session_is_current(user_id: int, token_version: int) -> bool:
@@ -134,7 +175,12 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
 
     origin = websocket.headers.get("origin")
     if origin and not _websocket_origin_is_allowed(websocket, origin):
-        logger.warning("Rejected WebSocket for camera_id=%s: untrusted origin", camera_id)
+        logger.warning(
+            "Rejected WebSocket for camera_id=%s: untrusted origin (origin=%s host=%s)",
+            camera_id,
+            origin,
+            websocket.headers.get("host", ""),
+        )
         await websocket.close(code=1008, reason="Untrusted origin")
         return
 
