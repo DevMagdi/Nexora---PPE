@@ -8,8 +8,20 @@ import numpy as np
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.ppe import canonical_class_name
 
 logger = get_logger(__name__)
+
+# أزواج الفئات الموجبة/السالبة لمنع انعكاس عتبات الثقة (موجب أعلى من سالب)
+_POSITIVE_TO_NEGATIVE_CANONICAL: dict[str, str] = {
+    "Hardhat": "NO-Hardhat",
+    "Safety Vest": "NO-Safety Vest",
+    "Mask": "NO-Mask",
+    "Gloves": "NO-Gloves",
+    "Safety Boots": "NO-Safety Boots",
+    "Goggles": "NO-Goggles",
+    "Head Cap": "NO-Head Cap",
+}
 
 # مصادر الكشف: النماذج (`model:*`) أو طبقة الذكاء الجلدي (`skin:*`)
 SOURCE_MODEL = "model"
@@ -188,16 +200,29 @@ def require_model_file(
 
 
 def sanitize_class_conf_thresholds(
-    class_names: dict[int, str], thresholds: dict[int, float]
+    class_names: dict[int, str],
+    thresholds: dict[int, float],
+    *,
+    migrated_from_retired: bool = False,
 ) -> dict[int, float]:
     """
     ينظّف خريطة عتبات الثقة لكل فئة بعد ترحيل الأوزان.
 
-    أرقام الفئات (class ids) في ``.env`` القديم ممكن تشير لفئات مش موجودة في
-    الوزن الجديد — الإبقاء عليها بيغلط العتبات على فئات تانية خالص، فبنرمي
-    أي id مش معروف للموديل المحمّل ونسجّله في اللوج.
+    * لو الموديل نفسه جاي من مسار مرفود (مثل ``bestMedicalModel2.pt``) وتم
+      ترحيله تلقائيًا إلى ``bestMedicalModel.pt``، فترتيب وأرقام الفئات تغيّر
+      بالكامل حتى لو الأرقام ما زالت داخل ``0..10`` — لذلك نُسقط الخريطة القديمة
+      بالكامل حتى لا تُفرض عتبة 0.70 على الفئات الموجبة (`hand gloves` / `mask`).
+    * في الحالات العادية، نرمي أي id غير موجود في الموديل المحمّل ونسجّله.
     """
     if not thresholds:
+        return {}
+    if migrated_from_retired:
+        logger.warning(
+            "Discarded stale class-conf thresholds %s from retired model weight "
+            "(class IDs do not match replacement model classes %s)",
+            thresholds,
+            class_names,
+        )
         return {}
     valid_ids = set(class_names)
     kept = {cid: thr for cid, thr in thresholds.items() if cid in valid_ids}
@@ -209,6 +234,56 @@ def sanitize_class_conf_thresholds(
             sorted(valid_ids),
         )
     return kept
+
+
+def sanitize_inverted_class_thresholds(
+    class_names: dict[int, str],
+    thresholds: dict[int, float],
+    default_class_conf: float,
+    *,
+    model_label: str = "",
+) -> dict[int, float]:
+    """
+    يمنع انعكاس عتبات الثقة بين الفئة الموجبة والفئة السالبة المقابلة لها.
+
+    في بقايا إعدادات ``bestMedicalModel2.pt``، كانت الفئة ``2`` (`hand gloves`)
+    والفئة ``5`` (`mask`) تأخذان ``0.70`` بينما الفئات السالبة ``7`` (`no hand gloves`)
+    و ``9`` (`no mask`) تأخذ ``0.25–0.30``، مما يجعل النظام يعمى عن الكمامة/القفاز
+    ويسجل مخالفة فورية. إذا كانت عتبة الفئة الموجبة أعلى من عتبة الفئة السالبة
+    المقابلة لها، نخفّض عتبة الموجب لتطابق عتبة السالب (أو العتبة الافتراضية).
+    """
+    if not thresholds or not class_names:
+        return dict(thresholds)
+
+    canonical_to_id: dict[str, int] = {
+        canonical_class_name(name): cid for cid, name in class_names.items()
+    }
+    adjusted = dict(thresholds)
+    prefix = f"[{model_label}] " if model_label else ""
+
+    for pos_canon, neg_canon in _POSITIVE_TO_NEGATIVE_CANONICAL.items():
+        pos_id = canonical_to_id.get(pos_canon)
+        neg_id = canonical_to_id.get(neg_canon)
+        if pos_id is None or neg_id is None or pos_id not in adjusted:
+            continue
+        pos_thr = adjusted[pos_id]
+        neg_thr = adjusted.get(neg_id, default_class_conf)
+        if pos_thr > neg_thr:
+            logger.warning(
+                "%sClass conf threshold %.2f for positive class %d (%r) exceeds "
+                "negative class %d (%r) threshold %.2f; clamping positive to %.2f",
+                prefix,
+                pos_thr,
+                pos_id,
+                class_names.get(pos_id, pos_canon),
+                neg_id,
+                class_names.get(neg_id, neg_canon),
+                neg_thr,
+                neg_thr,
+            )
+            adjusted[pos_id] = neg_thr
+
+    return adjusted
 
 
 def apply_confidence_floor(
@@ -285,26 +360,37 @@ class PPEDetector:
         self.model = YOLO(resolved_path)
         self.confidence = confidence
         self.default_class_conf = default_class_conf
-        # بعد ترحيل الأوزان: أي عتبة لفئة مش موجودة في الموديل الجديد بتتشال
+        model_label = os.path.basename(resolved_path)
+        # بعد ترحيل الأوزان: لو المسار الأصلي مرفود تتشال خريطة الـ class ids القديمة بالكامل،
+        # وفي الحالات العادية تتشال أي فئة غير موجودة في الموديل
         self.class_conf = sanitize_class_conf_thresholds(
-            self.model.names, settings.parse_class_thresholds_str(class_conf_thresholds)
+            self.model.names,
+            settings.parse_class_thresholds_str(class_conf_thresholds),
+            migrated_from_retired=is_retired_model_path(model_path),
         )
         # حاجز الدقة: عتبات أقل من الأرضية الدنيا بتترفع تلقائيًا (بلوج تحذيري)
         self.confidence, self.class_conf = apply_confidence_floor(
             self.confidence,
             self.class_conf,
             settings.DETECTION_CONFIDENCE_FLOOR,
-            model_label=os.path.basename(resolved_path),
+            model_label=model_label,
         )
         # الـ default class conf نفسه مش فايت من الخريطة — نطبّق عليه الأرضية كمان
         if self.default_class_conf < settings.DETECTION_CONFIDENCE_FLOOR:
             logger.warning(
                 "[%s] Default class conf %.2f is below the precision floor %.2f; raising it",
-                os.path.basename(resolved_path),
+                model_label,
                 self.default_class_conf,
                 settings.DETECTION_CONFIDENCE_FLOOR,
             )
             self.default_class_conf = settings.DETECTION_CONFIDENCE_FLOOR
+        # منع انعكاس العتبات (موجب أعلى من السالب المقابل له) حتى لو المسار اتعدّل يدويًا
+        self.class_conf = sanitize_inverted_class_thresholds(
+            self.model.names,
+            self.class_conf,
+            self.default_class_conf,
+            model_label=model_label,
+        )
         self._lock = threading.Lock()
 
         logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, self.confidence)

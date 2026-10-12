@@ -133,6 +133,7 @@ class Settings(BaseSettings):
     # Alert timing
     ALERT_COOLDOWN_SECONDS: int = 60
     VIOLATION_PERSIST_SECONDS: int = 8
+    VIOLATION_PERSIST_FLOOR_SECONDS: int = 8
     MEDICAL_VIOLATION_PERSIST_SECONDS: int = 3
     ALERT_DISPLAY_SECONDS: float = 3.0
 

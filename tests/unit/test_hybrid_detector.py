@@ -312,3 +312,79 @@ def test_last_stats_are_exposed():
     stats = hybrid.last_stats.as_dict()
     assert set(stats) >= {"construction", "medical", "merged", "bare_hands", "eye_bridge_hits", "synthetic"}
     assert stats["merged"] >= 1
+
+
+def test_goggles_and_no_goggles_never_coexist_in_same_frame():
+    """
+    إصلاح المشكلة #2: عندما يكتشف الموديل الطبي Goggles بثقة أعلى من سقف الإسقاط
+    (أو يكون فلتر جسر الأنف ضعيف الثقة)، لا يصح ظهور Goggles و NO-Goggles معاً.
+    """
+    construction = StubDetector([det("Person", (200, 40, 420, 460), 0.68)])
+    medical = StubDetector([det("goggle", (250, 60, 360, 100), 0.68)])
+    hybrid = HybridPPEDetector(
+        construction,
+        medical,
+        primary_profile="medical",
+        run_construction_assist=True,
+    )
+
+    detections = hybrid.detect(frame_with_person(), profile="medical")
+    names = [canonical_class_name(d.class_name) for d in detections]
+
+    assert "Goggles" in names
+    assert "NO-Goggles" not in names
+
+
+def test_cross_model_goggles_with_different_box_sizes_merge():
+    """
+    إصلاح المشكلة #3 (ب): الموديل الإنشائي والطبي يكتشفان Goggles بحجمين مختلفين
+    (IoU < 0.55 لكن أحدهما محتوى داخل الآخر) -> يندمجان في كشف واحد مع تعزيز الثقة.
+    """
+    construction = StubDetector(
+        [
+            det("Person", (200, 40, 420, 460), 0.85),
+            det("Goggles", (225, 48, 395, 122), 0.60),
+        ]
+    )
+    medical = StubDetector([det("goggle", (250, 60, 365, 98), 0.52)])
+    hybrid = HybridPPEDetector(
+        construction,
+        medical,
+        primary_profile="medical",
+        config=HybridConfig(skin_filter_enabled=False),
+        run_construction_assist=True,
+    )
+
+    detections = hybrid.detect(frame_with_person(), profile="medical")
+    goggles = [d for d in detections if canonical_class_name(d.class_name) == "Goggles"]
+
+    assert len(goggles) == 1
+    assert goggles[0].confidence > 0.60
+
+
+def test_mouth_skin_does_not_duplicate_existing_head_no_mask():
+    """
+    إصلاح المشكلة #3 (أ): وجود NO-Mask من الموديل الإنشائي على الوجه (حتى لو
+    احتواؤه مع النصف السفلي أقل من 0.45) لا ينتج NO-Mask ثانية من skin:mouth.
+    """
+    construction = StubDetector(
+        [
+            det("Person", (200, 40, 420, 460), 0.85),
+            # مستطيل على الجزء العلوي/الأوسط من الرأس بحيث تقاطعه مع lower_face_box محدود
+            det("NO-Mask", (220, 45, 400, 125), 0.96),
+        ]
+    )
+    hybrid = HybridPPEDetector(
+        construction,
+        None,
+        primary_profile="medical",
+        run_construction_assist=True,
+    )
+
+    detections = hybrid.detect(frame_with_person(), profile="medical")
+    no_masks = [d for d in detections if canonical_class_name(d.class_name) == "NO-Mask"]
+
+    assert len(no_masks) == 1
+    assert no_masks[0].confidence == 0.96
+    assert "model:construction" in no_masks[0].source
+

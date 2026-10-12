@@ -98,10 +98,22 @@ def test_sanitize_class_conf_thresholds_drops_unknown_class_ids():
 
 
 def test_ppedetector_drops_stale_thresholds_after_migration(tmp_path, monkeypatch):
-    # موك لـ ultralytics (الاختبارات كلها من غير torch/أوزان حقيقية)
+    # موك لـ ultralytics بنفس فئات bestMedicalModel.pt الـ 11 الفعلية
     fake_ultralytics = MagicMock()
     fake_model = MagicMock()
-    fake_model.names = {0: "mask", 1: "no mask"}
+    fake_model.names = {
+        0: "full cover",
+        1: "goggle",
+        2: "hand gloves",
+        3: "head cap",
+        4: "lab coat",
+        5: "mask",
+        6: "no goggle",
+        7: "no hand gloves",
+        8: "no head cap",
+        9: "no mask",
+        10: "shoe cover",
+    }
     fake_ultralytics.YOLO.return_value = fake_model
     monkeypatch.setitem(sys.modules, "ultralytics", fake_ultralytics)
 
@@ -109,11 +121,47 @@ def test_ppedetector_drops_stale_thresholds_after_migration(tmp_path, monkeypatc
     _make_model_dir(tmp_path, "bestMedicalModel.pt")
 
     detector = PPEDetector(
-        RETIRED,  # إعداد قديم يشير للوزن المرفود
-        0.15,
-        0.30,
-        "0:0.55,9:0.70",  # class 9 مش موجود في الموديل الجديد
+        RETIRED,  # إعداد قديم يشير للوزن المرفود bestMedicalModel2.pt
+        0.05,
+        0.35,
+        "2:0.7,5:0.7,7:0.15,8:0.15,9:0.3",  # خريطة الموديل القديم التي كانت تشوّه hand gloves و mask
     )
 
     fake_ultralytics.YOLO.assert_called_once_with(REPLACEMENT)
-    assert detector.class_conf == {0: 0.55}
+    # لأن الموديل ترحّل من وزن مرفود بترتيب فئات مختلف، تُسقط الخريطة القديمة بالكامل
+    assert detector.class_conf == {}
+
+
+def test_ppedetector_clamps_inverted_positive_thresholds_on_active_model(tmp_path, monkeypatch):
+    """حتى لو عدّل المستخدم المسار إلى bestMedicalModel.pt ونسي مسح العتبات القديمة المنعكسة."""
+    fake_ultralytics = MagicMock()
+    fake_model = MagicMock()
+    fake_model.names = {
+        0: "full cover",
+        1: "goggle",
+        2: "hand gloves",
+        3: "head cap",
+        4: "lab coat",
+        5: "mask",
+        6: "no goggle",
+        7: "no hand gloves",
+        8: "no head cap",
+        9: "no mask",
+        10: "shoe cover",
+    }
+    fake_ultralytics.YOLO.return_value = fake_model
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultralytics)
+
+    monkeypatch.chdir(tmp_path)
+    _make_model_dir(tmp_path, "bestMedicalModel.pt")
+
+    detector = PPEDetector(
+        REPLACEMENT,
+        0.25,
+        0.35,
+        "2:0.7,5:0.7,7:0.25,8:0.25,9:0.3",
+    )
+
+    # الفئات الموجبة (2=hand gloves, 5=mask) ممنوع تبقى أعلى من السالبة المقابلة (7=0.25, 9=0.30)
+    assert detector.class_conf[2] <= detector.class_conf[7]
+    assert detector.class_conf[5] <= detector.class_conf[9]

@@ -30,8 +30,29 @@ PPE_PRIORITY: list[str] = [
 ]
 MIN_PERSON_OVERLAP = 0.4
 # أدنى ثقة ليعتبر الـ Person من الموديل الإنشائي "سياقاً موثوقاً" في كاميرا طبية
-# (كان أي Person بـ 0.26 يتقلب بيكتب مخالفات "ناقص بالطو/غطاء" على الفاضي)
-MIN_MEDICAL_CONTEXT_CONF = 0.35
+# (كان أي Person بـ 0.26 أو 0.41 يتقلب بيكتب مخالفات "ناقص بالطو/غطاء" على الفاضي)
+MIN_MEDICAL_CONTEXT_CONF = 0.50
+# إذا كان مستطيل الوجه/الكمامة يغطي >= 55% من ارتفاع مستطيل الشخص، فالكاميرا قريبة
+# (Webcam للوجه فقط) ولا يظهر الجذع أصلاً للحكم على البالطو أو الغطاء الكامل
+MAX_FACE_TO_PERSON_HEIGHT_RATIO = 0.55
+
+
+def apply_persist_floor(persist_seconds: int, floor_seconds: int) -> int:
+    """
+    يرفع زمن ثبات المخالفات إذا كان في ``.env`` أقل من الحد الأدنى المعتمد.
+
+    يمنع تسجيل 4 مخالفات دفعة واحدة بعد 3 ثوانٍ فقط على كاميرا الإنشاءات بسبب
+    بقايا ``VIOLATION_PERSIST_SECONDS=3`` في ملفات ``.env`` القديمة.
+    """
+    if floor_seconds > 0 and persist_seconds < floor_seconds:
+        logger.warning(
+            "VIOLATION_PERSIST_SECONDS=%d is below the persistence floor %ds; raising it to %ds",
+            persist_seconds,
+            floor_seconds,
+            floor_seconds,
+        )
+        return floor_seconds
+    return persist_seconds
 
 
 @dataclass
@@ -71,27 +92,68 @@ class _CameraState:
         return self.ppe_states[ppe_key]
 
 
+# السياق الطبي الموثوق لفحص الغياب (مثل lab coat / full cover / shoe cover):
+# يقتصر على الشخص الموثوق (Person) أو المعدات الطبية الموجبة المكتشفة من الموديل،
+# ولا يعتمد على الفئات السالبة للوجه (مثل no mask) أو كشوف الجلد الصناعية.
 _MEDICAL_CONTEXT_NAMES: set[str] = {"person"} | {
-    _norm_name(str(cfg[key]))
+    _norm_name(str(cfg["positive"]))
     for cfg in PPE_CLASS_MAPS["medical"].values()
-    for key in ("positive", "negative")
-    if cfg.get(key)
+    if cfg.get("positive")
 }
+
+_FACE_ONLY_CANONICAL_NAMES: frozenset[str] = frozenset(
+    {"mask", "no-mask", "goggles", "no-goggles", "head cap", "no-head cap"}
+)
+
+
+def _is_closeup_face_only(detections: list[Detection]) -> bool:
+    """
+    هل الكادر لقطة وجه قريبة فقط (Webcam) بحيث لا يظهر الجذع/البالطو أصلاً؟
+
+    نقارن أكبر ارتفاع لمستطيل كمامة/وجه مكتشف من الموديل بأكبر ارتفاع لمستطيل
+    ``Person``. إذا غطّى الوجه ``>= MAX_FACE_TO_PERSON_HEIGHT_RATIO`` من ارتفاع
+    الشخص، فالمستطيل لا يحتوي على جذع مرئي للحكم على غياب ``lab coat``.
+    """
+    persons = [
+        d
+        for d in detections
+        if _norm_name(d.class_name) == "person"
+        and not is_skin_source(d.source)
+        and (d.y2 - d.y1) > 0
+    ]
+    if not persons:
+        return False
+
+    face_boxes = [
+        d
+        for d in detections
+        if _norm_name(d.class_name) in _FACE_ONLY_CANONICAL_NAMES
+        and not is_skin_source(d.source)
+        and (d.y2 - d.y1) > 0
+    ]
+    if not face_boxes:
+        return False
+
+    max_person_h = max(d.y2 - d.y1 for d in persons)
+    max_face_h = max(d.y2 - d.y1 for d in face_boxes)
+    return (max_face_h / float(max(1, max_person_h))) >= MAX_FACE_TO_PERSON_HEIGHT_RATIO
 
 
 def _has_medical_context(detections: list[Detection]) -> bool:
     """
-    فيه سياق طبي موثوق في الكادر؟
+    فيه سياق طبي موثوق في الكادر يصلح لفحص غياب البالطو/الغطاء؟
 
-    الشخص ممكن يجي من الموديل الإنشائي (النظام الهجين)، والقطع الطبية من
-    الموديل الطبي — الاتنين يعتبروا دليل على وجود طاقم في الكادر.
-
-    الشخص الضعيف (تحت ``MIN_MEDICAL_CONTEXT_CONF``) مش بيعتبر سياقاً — كان
-    بيخلي كاميرا طبية تكتب "ناقص بالطو/غطاء كامل" لمجرد بوكس متقلب من
-    الموديل الإنشائي على خلفية، وده اللي حصل في اللوج.
+    * الشخص لازم يجي من الموديل بثقة ``>= MIN_MEDICAL_CONTEXT_CONF`` (0.50).
+    * الكشوف السالبة (مثل ``no mask``) أو الكشوف الصناعية (``skin:*``) لا تثبت
+      وجود جسم طاقم طبي كامل في الكادر.
+    * إذا كانت الكاميرا قريبة وتُظهر الوجه فقط (Webcam)، لا نفعّل مخالفات الغياب.
     """
+    if _is_closeup_face_only(detections):
+        return False
+
     return any(
-        _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES
+        not is_skin_source(d.source)
+        and _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES
         and (
             _norm_name(d.class_name) != "person"
             or d.confidence >= MIN_MEDICAL_CONTEXT_CONF
@@ -138,16 +200,26 @@ def _medical_context_conf(detections: list[Detection]) -> float:
     """
     أعلى ثقة سياق طبي **موثوق** في الكادر (بتستخدم كثقة مخالفات الغياب).
 
-    الشخص الضعيف بيتجاهل حتى لا تُسجل مخالفات غياب بثقة بوكس متقلب.
+    * إذا وُجد ``Person`` موثوق في الكادر، نعتمد ثقته هو (حتى لا يأخذ ``no lab coat``
+      ثقة ``no mask`` البالغة 0.91 بينما ثقة الشخص نفسه 0.68).
+    * في حالة عدم وجود ``Person``، نعتمد أعلى ثقة لفئة طبية موجبة من الموديل.
     """
+    person_confs = [
+        d.confidence
+        for d in detections
+        if not is_skin_source(d.source)
+        and _norm_name(d.class_name) == "person"
+        and d.confidence >= MIN_MEDICAL_CONTEXT_CONF
+    ]
+    if person_confs:
+        return max(person_confs)
+
     confs = [
         d.confidence
         for d in detections
-        if _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES
-        and (
-            _norm_name(d.class_name) != "person"
-            or d.confidence >= MIN_MEDICAL_CONTEXT_CONF
-        )
+        if not is_skin_source(d.source)
+        and _norm_name(d.class_name) in _MEDICAL_CONTEXT_NAMES
+        and _norm_name(d.class_name) != "person"
     ]
     return max(confs, default=0.0)
 
@@ -324,10 +396,14 @@ class MedicalViolationChecker(BaseViolationChecker):
         cooldown_seconds: int = 10,
         persist_seconds: int = 3,
         grace_seconds: float = 1.5,
+        absence_persist_seconds: int | None = None,
     ) -> None:
         self.cooldown_seconds = cooldown_seconds
         self.persist_seconds = persist_seconds
         self.grace_seconds = grace_seconds
+        self.absence_persist_seconds = (
+            persist_seconds if absence_persist_seconds is None else absence_persist_seconds
+        )
         self._states: dict[int, _CameraState] = {}
 
     def _get_state(self, camera_id: int) -> _CameraState:
@@ -382,14 +458,16 @@ class MedicalViolationChecker(BaseViolationChecker):
                 is_violating = evidence is not None
                 confidence = evidence if evidence is not None else 0.0
                 violation_type = negative
+                required_persist = self.persist_seconds
             elif positive:
                 pos_key = _norm_name(positive)
                 has_positive = any(_norm_name(d.class_name) == pos_key for d in detections)
                 # لا نعتبر الفئة الموجبة غائبة إلا لو فيه سياق طبي موثوق بالكادر
-                # (شخص واضح من الموديل الإنشائي أو أي قطعة طبية) — مش أي كشف عشوائي
+                # (شخص واضح من الموديل الإنشائي أو قطعة طبية موجبة، وليس لقطة وجه فقط)
                 is_violating = medical_context and not has_positive
                 confidence = _medical_context_conf(detections)
                 violation_type = f"no {label}"
+                required_persist = self.absence_persist_seconds
             else:
                 continue
 
@@ -398,7 +476,7 @@ class MedicalViolationChecker(BaseViolationChecker):
                 time_missing = now - ppe_state.last_seen_time
                 time_since_alert = now - ppe_state.last_alert_time
 
-                if time_missing >= self.persist_seconds and time_since_alert >= self.cooldown_seconds:
+                if time_missing >= required_persist and time_since_alert >= self.cooldown_seconds:
                     ppe_state.last_alert_time = now
                     logger.info(
                         "Violation (medical) cam=%d type=%s conf=%.2f",
@@ -414,7 +492,12 @@ class MedicalViolationChecker(BaseViolationChecker):
                         )
                     )
             else:
-                if now - ppe_state.last_negative_time >= self.grace_seconds:
+                # في فئات الغياب (بدون كلاس سالب) عند غياب السياق الطبي عن الكادر
+                # نُصفّر عداد الغياب فوراً مثل كاميرات الإنشاءات حتى لا يتراكم على شخص عابر
+                if (
+                    (negative is None and not medical_context)
+                    or now - ppe_state.last_negative_time >= self.grace_seconds
+                ):
                     ppe_state.last_seen_time = now
 
         return violations
