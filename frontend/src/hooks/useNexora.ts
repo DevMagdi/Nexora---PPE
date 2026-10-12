@@ -21,6 +21,7 @@ export function useMe() {
   return useQuery({
     queryKey: ["me"],
     queryFn: me,
+    // A 401 before sign-in is the expected anonymous session check, not a retryable failure.
     retry: false,
     staleTime: 30_000,
   })

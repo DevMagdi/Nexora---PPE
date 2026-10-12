@@ -54,6 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # surfacing later at the first login/media request.
     ensure_jwt_secret_strength()
 
+    if settings.APP_ENV == "dev" and "JWT_SECRET" not in settings.model_fields_set:
+        logger.warning(
+            "JWT_SECRET is unset; this development key is ephemeral and access/media sessions "
+            "will be invalidated after a backend restart. Set JWT_SECRET in .env with "
+            "`python scripts/gen_jwt_secret.py` for stable local sessions."
+        )
+
     if settings.APP_ENV == "dev" and "BOOTSTRAP_PASSWORD" not in settings.model_fields_set:
         logger.warning(
             "Development bootstrap credentials (dev only): %s / %s",

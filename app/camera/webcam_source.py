@@ -5,7 +5,9 @@ import asyncio
 import cv2
 import numpy as np
 
+from app.camera.capture_utils import configure_capture_buffer
 from app.camera.source import CameraSource
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -22,6 +24,11 @@ class WebcamSource(CameraSource):
         if not self._cap.isOpened():
             logger.error("Cannot open webcam index %d", self.index)
             return False
+        configure_capture_buffer(
+            self._cap,
+            source_name="webcam",
+            buffer_size=settings.CAMERA_CAPTURE_BUFFER_SIZE,
+        )
         logger.info("Webcam %d opened", self.index)
         return True
 
