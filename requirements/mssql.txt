@@ -1,0 +1,9 @@
+# SQL Server (MSSQL) backend drivers for local runs and on-prem sites that use SQL Server.
+#
+# NOTE: pyodbc also needs the system-level "ODBC Driver 18 for SQL Server"
+# (a separate Microsoft installer — not a pip package). On Windows download it
+# from Microsoft; the DATABASE_URL must reference it, e.g.:
+#   mssql+aioodbc://USER:PASSWORD@HOST:1433/DBNAME?driver=ODBC+Driver+18+for+SQL+Server
+-r base.txt
+aioodbc>=0.4.0
+pyodbc>=5.0.0

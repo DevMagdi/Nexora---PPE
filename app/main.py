@@ -16,9 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.core.auth import get_current_user_media
+from app.core.auth import ensure_jwt_secret_strength, get_current_user_media
 from app.core.config import settings
 from app.core.logging import configure_root_logger, get_logger
+from app.db.driver_hints import database_backend_label, database_startup_hint
 from app.db.models import Camera, User
 from app.db.session import get_db, init_db
 
@@ -32,7 +33,12 @@ def _upgrade_database_sync() -> None:
     """Apply versioned schema changes before serving requests."""
     root = Path(__file__).resolve().parents[1]
     config = Config(str(root / "alembic.ini"))
-    command.upgrade(config, "head")
+    try:
+        command.upgrade(config, "head")
+    except Exception as exc:
+        # Surface missing DB drivers / bad URLs as an actionable message instead
+        # of a raw SQLAlchemy traceback (e.g. MSSQL without aioodbc/pyodbc).
+        raise RuntimeError(database_startup_hint(settings.DATABASE_URL, exc)) from exc
 
 
 async def upgrade_database() -> None:
@@ -43,6 +49,10 @@ async def upgrade_database() -> None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_root_logger(settings.LOG_LEVEL)
     logger.info("Starting Nexora PPE API (env=%s)", settings.APP_ENV)
+    logger.info("Database backend: %s", database_backend_label(settings.DATABASE_URL))
+    # Fail fast with a clear message instead of PyJWT's InsecureKeyLengthWarning
+    # surfacing later at the first login/media request.
+    ensure_jwt_secret_strength()
 
     if settings.APP_ENV == "dev" and "BOOTSTRAP_PASSWORD" not in settings.model_fields_set:
         logger.warning(
@@ -54,27 +64,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     os.makedirs(settings.FRAMES_DIR, exist_ok=True)
 
     # Fail closed: schema updates are versioned and applied before the app starts.
+    logger.info("Applying database migrations...")
     await upgrade_database()
+    logger.info("Database migrations applied")
     await init_db()
     logger.info("Database schema is up to date")
 
     from app.db.repository import ensure_bootstrap_user
 
+    logger.info("Ensuring bootstrap admin user...")
     await ensure_bootstrap_user(
         username=settings.BOOTSTRAP_USERNAME,
         password=settings.BOOTSTRAP_PASSWORD,
         sector=settings.BOOTSTRAP_SECTOR,
     )
+    logger.info("Bootstrap user check complete")
+
+    if FRONTEND_DIST.is_dir() and (FRONTEND_DIST / "index.html").is_file():
+        logger.info("Frontend bundle found — SPA will be served from %s", FRONTEND_DIST)
+    else:
+        logger.info(
+            "Frontend bundle not found — API-only mode "
+            "(dev docs at /docs, dashboard via `npm run dev` in frontend/)"
+        )
 
     from app.core.detector import PPEDetector
     from app.core.hybrid_detector import HybridPPEDetector
 
+    logger.info("Loading detection models (first run can take a while)...")
     construction_detector = PPEDetector(
         settings.CONSTRUCTION_MODEL_PATH,
         settings.CONSTRUCTION_DETECTION_CONFIDENCE,
         settings.CONSTRUCTION_DEFAULT_CLASS_CONF,
         settings.CONSTRUCTION_CLASS_CONF_THRESHOLDS,
         fallbacks=("Model/ppe.pt", "Model/ppe_construction.pt"),
+        setting_name="CONSTRUCTION_MODEL_PATH",
     )
     medical_detector = PPEDetector(
         settings.MEDICAL_MODEL_PATH,
@@ -82,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.MEDICAL_DEFAULT_CLASS_CONF,
         settings.MEDICAL_CLASS_CONF_THRESHOLDS,
         fallbacks=("Model/ppe_medical.pt",),
+        setting_name="MEDICAL_MODEL_PATH",
     )
 
     if settings.HYBRID_DETECTION_ENABLED:
@@ -109,9 +134,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.camera.manager import CameraManager
 
+    logger.info("Starting camera manager...")
     app.state.camera_manager = CameraManager(app.state.detectors)
     await app.state.camera_manager.start()
-    logger.info("Camera manager started")
+    logger.info("Camera manager started — API is ready")
 
     yield
 

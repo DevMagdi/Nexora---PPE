@@ -162,6 +162,31 @@ def resolve_model_path(model_path: str, fallbacks: tuple[str, ...] = ()) -> str:
     return migrated
 
 
+def require_model_file(
+    model_path: str,
+    fallbacks: tuple[str, ...] = (),
+    *,
+    setting_name: str = "",
+) -> str:
+    """Resolve a model path and fail fast with an actionable error when no weights exist.
+
+    Checks the configured path (after safe weight migration) plus every fallback,
+    so a typo'd ``.env`` path or a missing ``Model/*.pt`` file surfaces as a clear
+    ``FileNotFoundError`` instead of an obscure YOLO/ultralytics traceback.
+    """
+    resolved = resolve_model_path(model_path, fallbacks)
+    if os.path.exists(resolved):
+        return resolved
+    candidates = ", ".join([model_path, *fallbacks]) or "(none)"
+    where = f" (setting {setting_name})" if setting_name else ""
+    raise FileNotFoundError(
+        f"Detection model weights not found{where}. Checked: {candidates} "
+        f"(resolved to {resolved!r}). Put the .pt weights in Model/ or fix the model "
+        "path in .env (CONSTRUCTION_MODEL_PATH / MEDICAL_MODEL_PATH). "
+        "See docs/LOCAL_RUN_TROUBLESHOOTING_AR.md."
+    )
+
+
 def sanitize_class_conf_thresholds(
     class_names: dict[int, str], thresholds: dict[int, float]
 ) -> dict[int, float]:
@@ -242,10 +267,21 @@ class PPEDetector:
         default_class_conf: float,
         class_conf_thresholds: str = "",
         fallbacks: tuple[str, ...] = (),
+        *,
+        setting_name: str = "",
     ) -> None:
-        from ultralytics import YOLO
+        # Check weights on disk BEFORE importing ultralytics/torch, so a missing
+        # .pt file surfaces as a clear FileNotFoundError even when the ML stack
+        # is not installed yet.
+        resolved_path = require_model_file(model_path, fallbacks, setting_name=setting_name)
+        try:
+            from ultralytics import YOLO
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "The 'ultralytics' package is not installed, so YOLO models cannot load. "
+                "Install backend dependencies with `pip install -r requirements.txt`."
+            ) from exc
 
-        resolved_path = resolve_model_path(model_path, fallbacks)
         self.model = YOLO(resolved_path)
         self.confidence = confidence
         self.default_class_conf = default_class_conf
