@@ -12,56 +12,11 @@ import type {
   MeResponse,
 } from "@/types"
 
-const TOKEN_KEY = "nexora-token"
-const MEDIA_ORIGIN = String(import.meta.env.VITE_API_ORIGIN ?? "").replace(/\/$/, "")
-
 export const api = axios.create({
   baseURL: "/api/v1",
   headers: { "Content-Type": "application/json" },
   timeout: 30000,
-})
-
-export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || ""
-  } catch {
-    return ""
-  }
-}
-
-export function setToken(token: string) {
-  try {
-    localStorage.setItem(TOKEN_KEY, token)
-  } catch {
-    /* ignore */
-  }
-}
-
-export function clearToken() {
-  try {
-    localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* ignore */
-  }
-}
-
-export function logout() {
-  clearToken()
-  try {
-    localStorage.removeItem("nexora-user")
-  } catch {
-    /* ignore */
-  }
-  window.location.assign("/")
-}
-
-api.interceptors.request.use((config) => {
-  const token = getToken()
-  if (token) {
-    config.headers = config.headers ?? {}
-    config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
+  withCredentials: true,
 })
 
 api.interceptors.response.use(
@@ -69,7 +24,13 @@ api.interceptors.response.use(
   (error) => {
     if (error?.response?.status === 401) {
       const url = String(error?.config?.url ?? "")
-      if (!url.includes("/auth/login")) clearToken()
+      if (
+        !url.includes("/auth/login")
+        && !url.includes("/auth/logout")
+        && !url.includes("/auth/me")
+      ) {
+        window.location.assign("/")
+      }
     }
     return Promise.reject(error)
   },
@@ -77,11 +38,30 @@ api.interceptors.response.use(
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   const body = new URLSearchParams({ username, password })
-  const { data } = await axios.post<LoginResponse>("/api/v1/auth/login", body, {
+  const { data } = await api.post<LoginResponse>("/auth/login", body, {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    timeout: 30000,
   })
   return data
+}
+
+export async function refreshMediaSession(): Promise<void> {
+  await api.post("/auth/media-token")
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<LoginResponse> {
+  const { data } = await api.post<LoginResponse>("/auth/change-password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  })
+  return data
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await api.post("/auth/logout")
+  } finally {
+    window.location.assign("/")
+  }
 }
 
 export async function me(): Promise<MeResponse> {
@@ -177,27 +157,18 @@ export async function downloadViolationsCsv(params?: {
   URL.revokeObjectURL(url)
 }
 
-/** الباك بيرجع /frames/{frame_path} محمي بالتوكن */
+/** Media endpoints authenticate with a short-lived HttpOnly cookie, never a URL token. */
 export function resolveFrameUrl(frameUrl?: string | null): string | null {
   if (!frameUrl) return null
-  const token = getToken()
-  const base = /^https?:\/\//i.test(frameUrl)
-    ? frameUrl
-    : `${MEDIA_ORIGIN}${frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`}`
-  if (!token) return base
-  const sep = base.includes("?") ? "&" : "?"
-  return `${base}${sep}token=${encodeURIComponent(token)}`
+  if (/^https?:\/\//i.test(frameUrl)) return frameUrl
+  return frameUrl.startsWith("/") ? frameUrl : `/${frameUrl}`
 }
 
 export function getMjpegStreamUrl(cameraId: number): string {
-  const token = getToken()
-  const u = new URL(`/api/v1/stream/${cameraId}`, window.location.origin)
-  if (token) u.searchParams.set("token", token)
-  return `${u.pathname}${u.search}`
+  return `/api/v1/stream/${cameraId}`
 }
 
 export function getWebSocketUrl(cameraId: number): string {
-  const token = getToken()
   const proto = window.location.protocol === "https:" ? "wss" : "ws"
-  return `${proto}://${window.location.host}/api/v1/ws/${cameraId}?token=${encodeURIComponent(token)}`
+  return `${proto}://${window.location.host}/api/v1/ws/${cameraId}`
 }

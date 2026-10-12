@@ -78,6 +78,9 @@ async def ensure_bootstrap_user(username: str, password: str, sector: str) -> No
             username=username,
             password_hash=hash_password(password),
             sector=sector,
+            role="admin",
+            is_active=True,
+            must_change_password=True,
         )
         session.add(u)
         await session.commit()

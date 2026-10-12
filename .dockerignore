@@ -1,0 +1,29 @@
+# Secrets and customer/site data must never enter the image build context.
+.env
+.env.*
+!.env.example
+.git/
+.venv/
+venv/
+frontend/node_modules/
+frontend/dist/
+backups/
+*.nxb
+certs/
+videos/
+violation_frames/
+dataset/
+runs/
+Model/باكب/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local tooling artifacts.
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.py[cod]
+*.tsbuildinfo

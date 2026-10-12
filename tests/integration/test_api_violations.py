@@ -88,8 +88,8 @@ async def test_camera_crud_lifecycle(test_client):
         "/api/v1/cameras",
         json={
             "name": "Gate Camera",
-            "source_type": "rtsp",
-            "source_uri": "rtsp://192.168.1.10:554/stream1",
+            "source_type": "webcam",
+            "source_uri": "0",
             "profile": "construction",
             "enabled_classes": ["helmet", "vest"],
         },

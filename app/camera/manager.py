@@ -14,6 +14,7 @@ from app.alerts.dispatcher import AlertDispatcher
 from app.alerts.email_handler import EmailHandler
 from app.alerts.webhook_handler import SlackWebhookHandler, WebhookHandler
 from app.camera.source import CameraSource
+from app.camera.source_security import validate_file_uri, validate_rtsp_uri
 from app.core.config import settings
 from app.core.detector import PPEDetector, is_skin_source
 from app.core.frame_annotator import annotate_frame
@@ -145,29 +146,6 @@ class CameraManager:
     # Source building & validation
     # ------------------------------------------------------------------
 
-    def _validate_rtsp_uri(self, uri: str) -> None:
-        if not uri.lower().startswith(("rtsp://", "rtsps://", "http://", "https://")):
-            raise ValueError("RTSP source_uri must start with rtsp://, rtsps://, http://, or https://")
-        allowed = [p.strip() for p in settings.ALLOWED_RTSP_PREFIXES.split(",") if p.strip()]
-        if not allowed:
-            return
-        if not any(uri.startswith(p) for p in allowed):
-            raise ValueError(f"RTSP source not allowed by ALLOWED_RTSP_PREFIXES: {allowed}")
-
-    def _validate_file_uri(self, uri: str) -> str:
-        cleaned = (uri or "").strip()
-        if not cleaned or "\x00" in cleaned:
-            raise ValueError("Invalid video file path")
-        if settings.ALLOWED_VIDEO_DIR:
-            base_dir = os.path.realpath(settings.ALLOWED_VIDEO_DIR)
-            resolved = os.path.realpath(
-                cleaned if os.path.isabs(cleaned) else os.path.join(base_dir, cleaned)
-            )
-            if os.path.commonpath([base_dir, resolved]) != base_dir:
-                raise ValueError("Video file path is outside ALLOWED_VIDEO_DIR")
-            return resolved
-        return cleaned
-
     def _build_source(self, source_type: str, source_uri: str) -> CameraSource:
         if source_type == "webcam":
             from app.camera.webcam_source import WebcamSource
@@ -183,13 +161,13 @@ class CameraManager:
         if source_type == "rtsp":
             from app.camera.rtsp_source import RTSPSource
 
-            self._validate_rtsp_uri(source_uri)
+            validate_rtsp_uri(source_uri)
             return RTSPSource(source_uri)
 
         if source_type == "file":
             from app.camera.file_source import FileSource
 
-            validated_path = self._validate_file_uri(source_uri)
+            validated_path = validate_file_uri(source_uri)
             return FileSource(validated_path)
 
         raise ValueError(f"Unknown source_type: {source_type!r}")

@@ -33,7 +33,9 @@ def get_sync_database_url() -> str:
     return url
 
 
-config.set_main_option("sqlalchemy.url", get_sync_database_url())
+# Alembic configparser treats percent signs as interpolation markers; escape
+# credentials containing '%' before setting a database URL from the environment.
+config.set_main_option("sqlalchemy.url", get_sync_database_url().replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

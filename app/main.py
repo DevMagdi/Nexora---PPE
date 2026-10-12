@@ -1,53 +1,63 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from alembic import command
+from alembic.config import Config
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.core.auth import get_current_user_media
 from app.core.config import settings
 from app.core.logging import configure_root_logger, get_logger
 from app.db.models import Camera, User
-from app.db.session import get_db
+from app.db.session import get_db, init_db
 
 logger = get_logger(__name__)
 
-_CAMERA_FOLDER_RE = re.compile(r"^camera_(\d+)/")
+_FRAME_PATH_RE = re.compile(r"^camera_(\d+)/[A-Za-z0-9_.-]+\.jpg$")
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+
+
+def _upgrade_database_sync() -> None:
+    """Apply versioned schema changes before serving requests."""
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    command.upgrade(config, "head")
+
+
+async def upgrade_database() -> None:
+    await asyncio.to_thread(_upgrade_database_sync)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_root_logger(settings.LOG_LEVEL)
-    logger.info("Starting PPE Detection API (env=%s)", settings.APP_ENV)
+    logger.info("Starting Nexora PPE API (env=%s)", settings.APP_ENV)
 
-    if settings.APP_ENV == "prod":
-        if settings.JWT_SECRET in ("CHANGE_ME_SUPER_SECRET", "CHANGE_ME_TO_A_STRONG_RANDOM_SECRET"):
-            logger.warning(
-                "SECURITY WARNING: JWT_SECRET is using a default placeholder in production!"
-            )
-        if settings.BOOTSTRAP_PASSWORD == "admin123":
-            logger.warning(
-                "SECURITY WARNING: BOOTSTRAP_PASSWORD is set to default 'admin123' in production!"
-            )
+    if settings.APP_ENV == "dev" and "BOOTSTRAP_PASSWORD" not in settings.model_fields_set:
+        logger.warning(
+            "Development bootstrap credentials (dev only): %s / %s",
+            settings.BOOTSTRAP_USERNAME,
+            settings.BOOTSTRAP_PASSWORD,
+        )
 
     os.makedirs(settings.FRAMES_DIR, exist_ok=True)
 
-    # Init DB (create tables)
-    from app.db.session import init_db
-
+    # Fail closed: schema updates are versioned and applied before the app starts.
+    await upgrade_database()
     await init_db()
-    logger.info("Database initialised")
+    logger.info("Database schema is up to date")
 
-    # Bootstrap user (only if users table empty)
     from app.db.repository import ensure_bootstrap_user
 
     await ensure_bootstrap_user(
@@ -56,7 +66,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         sector=settings.BOOTSTRAP_SECTOR,
     )
 
-    # Load detectors (construction + medical YOLO weights)
     from app.core.detector import PPEDetector
     from app.core.hybrid_detector import HybridPPEDetector
 
@@ -72,14 +81,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.MEDICAL_DETECTION_CONFIDENCE,
         settings.MEDICAL_DEFAULT_CLASS_CONF,
         settings.MEDICAL_CLASS_CONF_THRESHOLDS,
-        # ملاحظة: bestMedicalModel2.pt وزن مرفود — الترحيل الآمن في detector.py
-        # بيحوّل أي إعداد قديم يشير إليه إلى bestMedicalModel.pt تلقائيًا
         fallbacks=("Model/ppe_medical.pt",),
     )
 
     if settings.HYBRID_DETECTION_ENABLED:
-        # كل بروفايل بياخد نسخة هجين بنفس الأوزان: الموديل الأساسي للبروفايل
-        # + الموديل التاني كمساعد + فلتر الجلد (skin ratio / distanceTransform / eye bridge)
         app.state.detectors = {
             "construction": HybridPPEDetector(
                 construction_detector,
@@ -100,9 +105,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "medical": medical_detector,
         }
         app.state.hybrid_enabled = False
-        logger.info("Detectors loaded (construction+medical), hybrid mode disabled")
+        logger.info("Detectors loaded (construction + medical), hybrid mode disabled")
 
-    # Start camera manager
     from app.camera.manager import CameraManager
 
     app.state.camera_manager = CameraManager(app.state.detectors)
@@ -120,18 +124,70 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Nexora PPE Detection API (Multi-Model)",
         description="Construction + Medical PPE compliance monitoring",
-        version="3.0.0",
+        version="3.1.0",
         lifespan=lifespan,
+        docs_url=None if settings.APP_ENV == "prod" else "/docs",
+        redoc_url=None if settings.APP_ENV == "prod" else "/redoc",
+        openapi_url=None if settings.APP_ENV == "prod" else "/openapi.json",
     )
 
-    origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()] or ["*"]
+    app.state.login_rate_limiter = None
+    from app.core.rate_limit import SlidingWindowRateLimiter
+
+    app.state.login_rate_limiter = SlidingWindowRateLimiter(
+        settings.LOGIN_RATE_LIMIT,
+        settings.LOGIN_RATE_WINDOW_SECONDS,
+    )
+
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.allowed_hosts,
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+        max_age=600,
     )
+
+    @app.middleware("http")
+    async def secure_http_responses(request: Request, call_next):
+        if (
+            settings.APP_ENV == "prod"
+            and request.url.scheme != "https"
+            and request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() != "https"
+        ):
+            return JSONResponse(status_code=400, content={"detail": "HTTPS is required"})
+
+        origin = request.headers.get("origin")
+        if (
+            settings.APP_ENV == "prod"
+            and origin
+            and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and origin.rstrip("/") not in settings.cors_origins
+        ):
+            return JSONResponse(status_code=403, content={"detail": "Untrusted request origin"})
+
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if settings.APP_ENV != "dev":
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; base-uri 'self'; object-src 'none'; "
+                "frame-ancestors 'none'; form-action 'self'; "
+                "img-src 'self' data: blob:; font-src 'self' data:; "
+                "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+                "connect-src 'self' ws: wss:"
+            )
+        if settings.APP_ENV == "prod":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        if request.url.path.startswith(("/api/", "/frames/")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     from app.api.routes.auth import router as auth_router
     from app.api.routes.cameras import router as cameras_router
@@ -156,24 +212,31 @@ def create_app() -> FastAPI:
         db: AsyncSession = Depends(get_db),
     ):
         normalized = file_path.replace("\\", "/").lstrip("/")
-        if not normalized or "\x00" in normalized:
+        match = _FRAME_PATH_RE.fullmatch(normalized)
+        if not match or "\x00" in normalized:
             raise HTTPException(status_code=404, detail="Frame not found")
 
-        base_dir = os.path.realpath(settings.FRAMES_DIR)
-        resolved = os.path.realpath(os.path.join(base_dir, normalized))
-        if os.path.commonpath([base_dir, resolved]) != base_dir or not os.path.isfile(resolved):
+        camera = await db.get(Camera, int(match.group(1)))
+        if camera is None:
+            raise HTTPException(status_code=404, detail="Frame not found")
+        if user.sector != "both" and camera.profile != user.sector:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        base_dir = Path(settings.FRAMES_DIR).resolve()
+        try:
+            resolved = (base_dir / normalized).resolve(strict=True)
+            resolved.relative_to(base_dir)
+        except (OSError, RuntimeError, ValueError):
+            raise HTTPException(status_code=404, detail="Frame not found") from None
+        if not resolved.is_file():
             raise HTTPException(status_code=404, detail="Frame not found")
 
-        match = _CAMERA_FOLDER_RE.match(normalized)
-        if match and user.sector != "both":
-            camera_id = int(match.group(1))
-            cam = await db.get(Camera, camera_id)
-            if cam and cam.profile != user.sector:
-                raise HTTPException(status_code=403, detail="Forbidden")
+        return FileResponse(
+            resolved,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
-        return FileResponse(resolved, media_type="image/jpeg")
-
-    # Serve built React frontend in production if frontend/dist is available
     if FRONTEND_DIST.is_dir() and (FRONTEND_DIST / "index.html").is_file():
         assets_dir = FRONTEND_DIST / "assets"
         if assets_dir.is_dir():
@@ -185,10 +248,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="Not Found")
             if full_path:
                 candidate = (FRONTEND_DIST / full_path).resolve()
-                if (
-                    str(candidate).startswith(str(FRONTEND_DIST.resolve()))
-                    and candidate.is_file()
-                ):
+                if candidate.is_relative_to(FRONTEND_DIST.resolve()) and candidate.is_file():
                     return FileResponse(str(candidate))
             return FileResponse(str(FRONTEND_DIST / "index.html"))
 

@@ -3,38 +3,108 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       APP_ENV: prod
-      DATABASE_URL: postgresql+asyncpg://ppe:ppe@db:5432/ppe_detection
+      LOG_LEVEL: INFO
+      DB_SQL_ECHO: "false"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?Set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?Run scripts/setup_onprem.py first}@db:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Run scripts/setup_onprem.py and set the HTTPS origin}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?Run scripts/setup_onprem.py and set the HTTPS host}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?Run scripts/setup_onprem.py to set the trusted Caddy address}
+      ALLOWED_RTSP_PREFIXES: ${ALLOWED_RTSP_PREFIXES:?Set camera network allowlists in .env}
+      ALLOWED_VIDEO_DIR: /var/nexora/videos
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Run scripts/setup_onprem.py first}
+      BACKUP_DIR: /var/nexora/backups
       CONSTRUCTION_MODEL_PATH: Model/ppe.pt
       MEDICAL_MODEL_PATH: Model/bestMedicalModel.pt
       HYBRID_DETECTION_ENABLED: "true"
     env_file:
-      - path: .env
-        required: false
+      - .env
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --forwarded-allow-ips
+      - ${TRUSTED_PROXIES:?Run scripts/setup_onprem.py to set the trusted Caddy address}
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      cameras:
+        gw_priority: 100
+      edge:
+        ipv4_address: ${APP_EDGE_CONTAINER_IP:?Run scripts/setup_onprem.py first}
+      data: {}
     volumes:
       - violation_frames:/app/violation_frames
+      - ./videos:/var/nexora/videos:ro
+      - encrypted_backups:/var/nexora/backups
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ppe
-      POSTGRES_PASSWORD: ppe
-      POSTGRES_DB: ppe_detection
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/setup_onprem.py first}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      data:
+        ipv4_address: ${DB_CONTAINER_IP:?Run scripts/setup_onprem.py first}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ppe -d ppe_detection"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      NEXORA_HOST: ${NEXORA_HOST:?Run scripts/setup_onprem.py with the site hostname}
+    ports:
+      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:80:80"
+      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      edge:
+        ipv4_address: ${CADDY_CONTAINER_IP:?Run scripts/setup_onprem.py first}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   violation_frames:
+  encrypted_backups:
+  caddy_data:
+  caddy_config:
+
+networks:
+  cameras:
+    driver: bridge
+  edge:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${EDGE_DOCKER_SUBNET:?Run scripts/setup_onprem.py first}
+  data:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${DATA_DOCKER_SUBNET:?Run scripts/setup_onprem.py first}

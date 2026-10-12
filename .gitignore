@@ -39,10 +39,14 @@ ENV/
 htmlcov/
 
 # ── Databases & Runtime Artifacts ─────────────────────────────
+/certs/
+*.nxb
 *.db
 *.sqlite
 *.sqlite3
 violation_frames/
+/backups/
+/videos/
 no_hardhat_frame.jpg
 nexora_core_code.txt
 

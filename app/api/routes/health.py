@@ -1,48 +1,31 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.deps import get_camera_manager
 from app.camera.manager import CameraManager
+from app.core.auth import require_roles
+from app.db.models import User
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-async def health(request: Request):
-    try:
-        manager: CameraManager = get_camera_manager(request)
-        active = manager.active_count()
-        detectors_loaded = bool(
-            getattr(request.app.state, "detectors", None)
-            or getattr(request.app.state, "detector", None)
-        )
-        hybrid_enabled = bool(getattr(request.app.state, "hybrid_enabled", False))
-    except Exception:
-        active = 0
-        detectors_loaded = False
-        hybrid_enabled = False
-
-    return {
-        "status": "ok",
-        "detectors_loaded": detectors_loaded,
-        "model_loaded": detectors_loaded,
-        "hybrid_detection": hybrid_enabled,
-        "cameras_active": active,
-    }
+async def health():
+    # Keep this endpoint suitable for a reverse-proxy liveness probe: do not
+    # disclose model state, database details, paths, versions, or camera counts.
+    return {"status": "ok"}
 
 
 @router.get("/metrics")
-async def metrics(request: Request):
-    try:
-        manager: CameraManager = get_camera_manager(request)
-        cameras = manager.counts_snapshot()
-        active = manager.active_count()
-    except Exception:
-        cameras = {}
-        active = 0
-
+async def metrics(
+    request: Request,
+    user: User = Depends(require_roles("admin")),
+):
+    if user.sector != "both":
+        raise HTTPException(status_code=403, detail="System metrics require a both-sector administrator")
+    manager: CameraManager = get_camera_manager(request)
     return {
-        "cameras_active": active,
-        "cameras": cameras,
+        "cameras_active": manager.active_count(),
+        "cameras": manager.counts_snapshot(),
     }
