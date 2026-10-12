@@ -57,6 +57,8 @@ Model/باكب/
 yolov8n.pt
 
 # ── Frontend ──────────────────────────────────────────────────
+!frontend/src/lib/
+!frontend/src/lib/**
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
