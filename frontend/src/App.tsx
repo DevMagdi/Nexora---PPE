@@ -88,7 +88,10 @@ type LiveCounts = {
   person?: number
   no_mask?: number
   no_gloves?: number
+  no_goggles?: number
   no_cap?: number
+  /** كشوف أكّدها/ولّدها فلتر الجلد (distanceTransform / جسر العينين) */
+  skin_hits?: number
   total?: number
 }
 
@@ -235,7 +238,9 @@ function normalizeLiveCounts(raw: unknown): LiveCounts | null {
     person: n(d.person ?? d.person_count),
     no_mask: n(d.no_mask),
     no_gloves: n(d.no_gloves),
+    no_goggles: n(d.no_goggles),
     no_cap: n(d.no_cap),
+    skin_hits: n(d.skin_hits),
     total: n(d.total ?? d.total_detections),
   }
 }
@@ -252,6 +257,7 @@ function liveMetrics(profile: string | undefined, c: LiveCounts): LiveMetricItem
     return [
       { value: c.no_mask, label: "بدون كمامة" },
       { value: c.no_gloves, label: "بدون قفازات" },
+      { value: c.no_goggles, label: "بدون نظارات واقية" },
       { value: c.no_cap, label: "بدون غطاء رأس" },
       { value: c.total, label: "إجمالي الكشف" },
     ]
@@ -268,6 +274,7 @@ function sideMetricIcon(label: string) {
   if (label === "خوذات") return <HardHat className="size-4 text-warning" />
   if (label === "سترات") return <Shirt className="size-4 text-highlight" />
   if (label === "إجمالي الكشف") return <Boxes className="size-4 text-primary" />
+  if (label.includes("نظارات")) return <Eye className="size-4 text-warning" />
   if (label.includes("كمامة")) return <ShieldAlert className="size-4 text-destructive" />
   if (label.includes("قفاز")) return <ShieldAlert className="size-4 text-destructive" />
   if (label.includes("غطاء")) return <HardHat className="size-4 text-warning" />
@@ -1324,7 +1331,10 @@ export default function App() {
   const liveWorkers = selectedCamera?.is_running && !isMedicalView ? activeCounts.person : undefined
   const medicalNegatives =
     selectedCamera?.is_running && isMedicalView
-      ? (activeCounts.no_mask ?? 0) + (activeCounts.no_gloves ?? 0) + (activeCounts.no_cap ?? 0)
+      ? (activeCounts.no_mask ?? 0) +
+        (activeCounts.no_gloves ?? 0) +
+        (activeCounts.no_goggles ?? 0) +
+        (activeCounts.no_cap ?? 0)
       : undefined
   const overlayMetrics = liveMetrics(activeProfile, activeCounts)
   const camPending = selectedCamera !== null && togglingCamId === selectedCamera.id
@@ -1667,7 +1677,7 @@ export default function App() {
                     hint={
                       selectedCamera?.is_running
                         ? isMedicalView
-                          ? `${activeCounts.no_mask ?? 0} كمامة · ${activeCounts.no_gloves ?? 0} قفازات · ${activeCounts.no_cap ?? 0} غطاء رأس`
+                          ? `${activeCounts.no_mask ?? 0} كمامة · ${activeCounts.no_gloves ?? 0} قفازات · ${activeCounts.no_goggles ?? 0} نظارات · ${activeCounts.no_cap ?? 0} غطاء رأس`
                           : `${activeCounts.hardhat ?? 0} خوذة · ${activeCounts.vest ?? 0} سترة`
                         : "لا يوجد بث نشط"
                     }

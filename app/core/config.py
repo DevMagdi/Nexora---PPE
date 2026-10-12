@@ -44,10 +44,33 @@ class Settings(BaseSettings):
     CONSTRUCTION_CLASS_CONF_THRESHOLDS: str = ""
 
     # Medical Model
-    MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel2.pt"
+    MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel.pt"
     MEDICAL_DETECTION_CONFIDENCE: float = 0.15
     MEDICAL_DEFAULT_CLASS_CONF: float = 0.30
     MEDICAL_CLASS_CONF_THRESHOLDS: str = ""
+
+    # Hybrid detector (Medical + Construction models fused on one frame)
+    HYBRID_DETECTION_ENABLED: bool = True
+    # الموديل الإنشائي بيدّي فئة Person + ربط القطع للأشخاص لكاميرات القطاع الطبي
+    HYBRID_CONSTRUCTION_ON_MEDICAL: bool = True
+    # الموديل الطبي يقدر يضيف تحقق الكمامة/النظارة لكاميرات الإنشاءات (أثقل)
+    HYBRID_MEDICAL_ON_CONSTRUCTION: bool = False
+    HYBRID_MERGE_IOU: float = 0.55
+    HYBRID_CONFLICT_IOU: float = 0.30
+    HYBRID_OVERRIDE_MIN_CONTAINMENT: float = 0.45
+    HYBRID_HEAD_REGION_RATIO: float = 0.32
+
+    # Skin filter heuristics (calc_skin_ratio / distanceTransform / eye bridge)
+    SKIN_FILTER_ENABLED: bool = True
+    SKIN_BARE_HAND_ENABLED: bool = True
+    SKIN_EYE_BRIDGE_ENABLED: bool = True
+    SKIN_MIN_RATIO: float = 0.18
+    SKIN_STRONG_RATIO: float = 0.32
+    SKIN_BARE_HAND_MIN_THICKNESS: float = 0.12
+    SKIN_BARE_HAND_MIN_AREA: float = 0.10
+    SKIN_EYE_BRIDGE_MIN_SKIN_RATIO: float = 0.22
+    SKIN_GLASS_CONFIRM_MIN_RATIO: float = 0.05
+    SKIN_SYNTHETIC_MIN_CONF: float = 0.45
 
     # Violation frames storage
     FRAMES_DIR: str = "violation_frames"

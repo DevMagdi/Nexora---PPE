@@ -171,3 +171,65 @@ def test_medical_positive_only_class_violation(medical_checker):
 
     assert len(res) == 1
     assert res[0].violation_type == "no lab coat"
+
+
+def test_construction_checker_understands_medical_style_goggle_name(checker):
+    """فلتر الجلد/الموديل الطبي ممكن يبعتوا `no goggle` — لازم تتقري كـ NO-Goggles."""
+    camera_id = 20
+    detections = [
+        make_detection("Person", box=(0, 0, 100, 300)),
+        make_detection("no goggle", confidence=0.66, box=(10, 10, 60, 60)),
+    ]
+
+    with patch("time.time", return_value=1000.0):
+        checker._get_state(camera_id).state_for("goggles").last_seen_time = 980.0
+        result = checker.check(camera_id, detections, enabled_classes=["goggles"])
+
+    assert len(result) == 1
+    assert result[0].violation_type == "NO-Goggles"
+    assert result[0].confidence == pytest.approx(0.66)
+
+
+def test_medical_checker_accepts_skin_generated_no_goggles(medical_checker):
+    """كشف جسر العينين بيطلع NO-Goggles (صيغة موحّدة) والـ checker لازم يفهمه."""
+    camera_id = 21
+    dets = [
+        make_detection("Person", confidence=0.9, box=(0, 0, 200, 500)),
+        make_detection("NO-Goggles", confidence=0.72, box=(10, 10, 120, 90)),
+    ]
+
+    with patch("time.time", return_value=1000.0):
+        medical_checker._get_state(camera_id).state_for("goggles").last_seen_time = 995.0
+        res = medical_checker.check(camera_id, dets, enabled_classes=["goggles"])
+
+    assert len(res) == 1
+    assert res[0].violation_type == "no goggle"
+    assert res[0].confidence == pytest.approx(0.72)
+
+
+def test_medical_positive_only_class_uses_hybrid_person_context(medical_checker):
+    """الشخص بييجي من الموديل الإنشائي في النظام الهجين => يفعّل فحص غياب البالطو."""
+    camera_id = 22
+    dets = [make_detection("Person", confidence=0.9, box=(0, 0, 200, 500))]
+
+    with patch("time.time", return_value=1000.0):
+        medical_checker._get_state(camera_id).state_for("coat").last_seen_time = 995.0
+        res = medical_checker.check(camera_id, dets, enabled_classes=["coat"])
+
+    assert len(res) == 1
+    assert res[0].violation_type == "no lab coat"
+
+
+def test_medical_positive_only_class_ignores_unrelated_detections(medical_checker):
+    """كشف إنشائي غير مرتبط (خوذة بدون شخص) مش دليل على وجود طاقم طبي."""
+    camera_id = 23
+    dets = [
+        make_detection("Hardhat", confidence=0.9, box=(0, 0, 50, 50)),
+        make_detection("Safety Vest", confidence=0.8, box=(0, 0, 50, 50)),
+    ]
+
+    with patch("time.time", return_value=1000.0):
+        medical_checker._get_state(camera_id).state_for("coat").last_seen_time = 995.0
+        res = medical_checker.check(camera_id, dets, enabled_classes=["coat"])
+
+    assert res == []

@@ -15,10 +15,10 @@ from app.alerts.email_handler import EmailHandler
 from app.alerts.webhook_handler import SlackWebhookHandler, WebhookHandler
 from app.camera.source import CameraSource
 from app.core.config import settings
-from app.core.detector import PPEDetector
+from app.core.detector import PPEDetector, is_skin_source
 from app.core.frame_annotator import annotate_frame
 from app.core.logging import get_logger
-from app.core.ppe import Profile, sanitize_enabled_classes
+from app.core.ppe import Profile, canonical_class_name, sanitize_enabled_classes
 from app.core.violation_checker import (
     BaseViolationChecker,
     ConstructionViolationChecker,
@@ -269,10 +269,18 @@ class CameraManager:
 
     @staticmethod
     def _count_by_name(detections: list, name: str) -> int:
-        key = (name or "").strip().lower()
-        return sum(1 for d in detections if (d.class_name or "").strip().lower() == key)
+        # مقارنة بالأسماء الموحّدة: `no mask` (موديل طبي) == `NO-Mask` (إنشائي/فلتر الجلد)
+        key = canonical_class_name(name).lower()
+        return sum(1 for d in detections if canonical_class_name(d.class_name).lower() == key)
+
+    @staticmethod
+    def _skin_hits(detections: list) -> int:
+        """عدد الكشوف اللي أكّدها/ولّدها فلتر الجلد (distanceTransform / جسر العينين)."""
+        return sum(1 for d in detections if is_skin_source(getattr(d, "source", None)))
 
     def _compute_counts(self, profile: Profile, detections: list) -> dict:
+        # العدّاد بيربط الكلاس الموحّد (canonical) بالخانات اللي الفرونت بيقراها،
+        # فبيشتغل مع موديل طبي (no mask) أو إنشائي (NO-Mask) أو كشف من فلتر الجلد.
         if profile == "construction":
             return {
                 "hardhat": self._count_by_name(detections, "Hardhat"),
@@ -280,12 +288,17 @@ class CameraManager:
                 "person": self._count_by_name(detections, "Person"),
                 "no_mask": self._count_by_name(detections, "NO-Mask"),
                 "no_gloves": self._count_by_name(detections, "NO-Gloves"),
+                "no_goggles": self._count_by_name(detections, "NO-Goggles"),
+                "skin_hits": self._skin_hits(detections),
                 "total": len(detections),
             }
         return {
-            "no_mask": self._count_by_name(detections, "no mask"),
-            "no_gloves": self._count_by_name(detections, "no hand gloves"),
-            "no_cap": self._count_by_name(detections, "no head cap"),
+            "person": self._count_by_name(detections, "Person"),
+            "no_mask": self._count_by_name(detections, "NO-Mask"),
+            "no_gloves": self._count_by_name(detections, "NO-Gloves"),
+            "no_goggles": self._count_by_name(detections, "NO-Goggles"),
+            "no_cap": self._count_by_name(detections, "NO-Head Cap"),
+            "skin_hits": self._skin_hits(detections),
             "total": len(detections),
         }
 
@@ -295,10 +308,12 @@ class CameraManager:
                 f"Hardhats: {counts.get('hardhat', 0)}",
                 f"Safety Vests: {counts.get('vest', 0)}",
                 f"People: {counts.get('person', 0)}",
+                f"NO-Goggles: {counts.get('no_goggles', 0)}",
             ]
         return [
             f"NO-Mask: {counts.get('no_mask', 0)}",
             f"NO-Gloves: {counts.get('no_gloves', 0)}",
+            f"NO-Goggles: {counts.get('no_goggles', 0)}",
             f"NO-HeadCap: {counts.get('no_cap', 0)}",
         ]
 
@@ -354,8 +369,18 @@ class CameraManager:
                 now_ts = time.time()
                 if now_ts - entry.last_det_log >= 5:
                     entry.last_det_log = now_ts
-                    sample = [(d.class_name, round(d.confidence, 2)) for d in detections[:8]]
-                    logger.info("cam=%d profile=%s dets=%s", camera_id, entry.profile, sample)
+                    sample = [
+                        (d.class_name, round(d.confidence, 2), d.source)
+                        for d in detections[:8]
+                    ]
+                    hybrid_stats = getattr(detector, "last_stats", None)
+                    logger.info(
+                        "cam=%d profile=%s dets=%s hybrid=%s",
+                        camera_id,
+                        entry.profile,
+                        sample,
+                        hybrid_stats.as_dict() if hybrid_stats else "n/a",
+                    )
 
                 violations = checker.check(
                     camera_id, detections, enabled_classes=entry.enabled_classes

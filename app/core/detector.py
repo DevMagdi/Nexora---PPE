@@ -11,6 +11,15 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# مصادر الكشف: النماذج (`model:*`) أو طبقة الذكاء الجلدي (`skin:*`)
+SOURCE_MODEL = "model"
+SOURCE_SKIN_PREFIX = "skin:"
+
+
+def is_skin_source(source: str | None) -> bool:
+    """هل الكشف ده جه/اتأكّد من فلتر الجلد (distanceTransform / جسر العينين)؟"""
+    return bool(source) and SOURCE_SKIN_PREFIX in source
+
 # ألوان (نغطي construction + medical names)
 CLASS_COLORS_BY_NAME = {
     # Construction
@@ -39,7 +48,18 @@ CLASS_COLORS_BY_NAME = {
     "lab coat": (255, 0, 255),
     "full cover": (255, 255, 255),
     "shoe cover": (100, 200, 255),
+    # Canonical (hybrid) names
+    "Head Cap": (0, 255, 255),
+    "NO-Head Cap": (0, 0, 255),
+    "Lab Coat": (255, 0, 255),
+    "Full Cover": (255, 255, 255),
+    "Shoe Cover": (100, 200, 255),
 }
+
+# ألوان الكشوف المولّدة من فلتر الجلد/الجسر (هجين)
+CLASS_COLORS_BY_NAME.setdefault("NO-Goggles", (80, 200, 255))
+CLASS_COLORS_BY_NAME.setdefault("NO-Mask", (60, 60, 255))
+CLASS_COLORS_BY_NAME.setdefault("NO-Gloves", (255, 120, 40))
 
 
 @dataclass
@@ -52,6 +72,8 @@ class Detection:
     x2: int
     y2: int
     color: tuple[int, int, int]
+    # مصدر الكشف: "model" أو "skin:eye_bridge" / "skin:mouth" / "skin:distance_transform"
+    source: str = "model"
 
 
 def resolve_model_path(model_path: str, fallbacks: tuple[str, ...] = ()) -> str:
