@@ -1,89 +1,90 @@
 # دليل استكشاف التشغيل المحلي (Local Run Troubleshooting)
 
-> هذا الدليل مكتوب بالعربية لتشخيص أشهر مشاكل `python -m uvicorn app.main:app --reload`
-> على Windows/Linux، وعلى رأسها تحذير `InsecureKeyLengthWarning` والتشغيل مع SQL Server.
+> هذا الدليل لتشخيص تشغيل `python -m uvicorn app.main:app --reload` على Windows/Linux،
+> وبالذات توقف startup عند Alembic، بث الكاميرا، وتحذير مفتاح JWT الضعيف.
 
 ---
 
-## 1. اللوج اللي شفته — سطر بسطر و"وصل فين؟"
+## 1. تحليل اللوج المرسل — وصل لفين فعلًا؟
 
-لوج مثل هذا:
+الجزء الذي أرسلته:
 
 ```text
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 INFO:     Started reloader process ... using WatchFiles
 INFO:     Started server process ...
 INFO:     Waiting for application startup.
-2026-10-12 15:23:39 | INFO     | app.main | Starting Nexora PPE API (env=dev)
+2026-10-12 15:44:49 | INFO     | app.main | Starting Nexora PPE API (env=dev)
+2026-10-12 15:44:49 | INFO     | app.main | Database backend: SQL Server (aioodbc)
+2026-10-12 15:44:49 | INFO     | app.main | Applying database migrations...
 INFO  [alembic.runtime.migration] Context impl MSSQLImpl.
 INFO  [alembic.runtime.migration] Will assume transactional DDL.
-.../jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 22 bytes long ...
-.../jwt/api_jwt.py:370: InsecureKeyLengthWarning: The HMAC key is 22 bytes long ...
 ```
 
-معناه:
+**المؤكد من المقتطف:** Uvicorn بدأ، ومرحلة migrations بدأت، وAlembic تعرّف على SQL Server. ظهور `Context impl MSSQLImpl` يعني أن اتصال Alembic المتزامن اتفتح؛ لكنه **لا** يعني أن الـ migrations خلصت أو أن الـ API جاهز. و`Will assume transactional DDL` رسالة عن أسلوب المعاملة فقط.
 
-| السطر | المعنى |
-|---|---|
-| `Uvicorn running on ...` | سيرفر Uvicorn اشتغل وبيسمع على البورت |
-| `Started reloader process` | وضع `--reload` شغال (أي تعديل في الكود يعيد التشغيل) |
-| `Waiting for application startup` | Uvicorn مستني الـ `lifespan` بتاع FastAPI يخلص |
-| `Starting Nexora PPE API (env=dev)` | التطبيق بدأ فعلًا بوضع التطوير |
-| `Context impl MSSQLImpl` | الـ `DATABASE_URL` بتاعك **SQL Server** (مش SQLite الافتراضي) والاتصال بالقاعدة نجح |
-| `Will assume transactional DDL` | Alembic بدأ يطبق الـ migrations — رسالة طبيعية مع SQL Server |
-| `InsecureKeyLengthWarning ... 22 bytes` | ⚠️ **المشكلة الأساسية**: قيمة `JWT_SECRET` في ملف `.env` قصيرة (22 بايت) بينما HS256 يحتاج **32 بايت على الأقل** (RFC 7518) |
+لا يظهر `Application startup complete` في المقتطف، لذلك لا نقدر نؤكد أن السيرفر كان جاهزًا وقت أخذ اللوج. لكن غياب `Database migrations applied` وباقي رسائل `app.main` **لوحده لا يثبت أن التطبيق علق**: كان إعداد Alembic يعيد ضبط مستوى root logger إلى `WARNING`، فيخفي رسائل `INFO` التي تأتي بعد `Applying database migrations...` حتى لو التطبيق أكمل. اتصلح ده الآن بالحفاظ على مستوى اللوج والـ loggers بعد Alembic. بعد الإصلاح، لو انتهى اللوج عند سطر معيّن، تقدر تحدد مرحلة الانتظار فعلًا.
 
-### وصل فين بالظبط؟
-
-التحذيرين بيظهروا **فقط** عند إنشاء/قراءة توكن (`jwt.encode` لحظة الـ login، و`jwt.decode` مع أول طلب موثّق)،
-فمعنى ظهورهم إن السيرفر غالبًا **كمّل الـ startup كله بنجاح**: الـ migrations، تجهيز القاعدة، تحميل موديلات
-YOLO، وتشغيل الـ camera manager — وبعدها استقبل أول login منك أو من الداشبورد.
-
-بعد الإصلاحات في هذا الفرع، الـ startup بقى يطبع مراحل واضحة تعرف منها "وصل فين" مباشرة:
+بعد إضافة سجلات تشخيصية وحدّ لانتظار اتصال/lock قاعدة البيانات، التسلسل المتوقع يكون قريبًا من:
 
 ```text
-Starting Nexora PPE API (env=dev)
-Database backend: SQL Server (aioodbc)
 Applying database migrations...
+INFO [alembic.runtime.migration] Opening database connection for Alembic migrations...
+INFO [alembic.runtime.migration] Alembic database connection established (dialect=mssql)
+INFO [alembic.runtime.migration] SQL Server migration lock wait limited to 15000 ms
+INFO [alembic.runtime.migration] Checking current schema revision and applying pending migrations...
+INFO [alembic.runtime.migration] Context impl MSSQLImpl.
+INFO [alembic.runtime.migration] Will assume transactional DDL.
+INFO [alembic.runtime.migration] Running upgrade ...
+INFO [alembic.runtime.migration] Alembic migration run completed
 Database migrations applied
-Database schema is up to date
-Ensuring bootstrap admin user...
-Bootstrap user check complete
-Loading detection models (first run can take a while)...
+...
 Camera manager started — API is ready
+INFO:     Application startup complete.
 ```
 
-لو شفت `Camera manager started — API is ready` وبعدها `Application startup complete` من Uvicorn،
-فالسيرفر جاهز تمامًا. ولو وقف قبل سطر معيّن، فالمشكلة في المرحلة اللي بعده مباشرة.
+لو آخر سطر عندك ما زال `Will assume transactional DDL`، انتظر حدّ الـ lock المُعدّ (15 ثانية افتراضيًا) ثم راجع رسالة الخطأ الجديدة. إذا ظهر `lock timeout`، أوقف أي نسخة API/Alembic أخرى تستخدم نفس قاعدة SQL Server وافحص المعاملات المفتوحة. **لا تغيّر `DATABASE_URL` إلى SQLite عشوائيًا**؛ ده ممكن يفتح قاعدة مختلفة ويخلي بيانات SQL Server تبدو كأنها اختفت.
+
+### تحذير JWT حالة منفصلة
+
+`InsecureKeyLengthWarning` لا يظهر في المقتطف الحالي. لو ظهر في لوج آخر عند تسجيل الدخول، فده يعني أن `JWT_SECRET` أقصر من 32 بايت؛ لكنه لا يفسّر التوقف عند Alembic. الإعدادات الحالية ترفض المفتاح الضعيف برسالة واضحة قبل قبول الطلب.
 
 ---
 
-## 2. المشاكل اللي كانت في اللوج
+## 2. المشاكل التي يغطيها الإصلاح
 
-### المشكلة 1 (الأساسية): `JWT_SECRET` ضعيف — 22 بايت بدل 32+ ⚠️
+### المشكلة 1: رسائل التطبيق اختفت بعد بدء Alembic
 
-- **السبب**: قيمة `JWT_SECRET` في `.env` قصيرة أو نص عادي (مثل `my-dev-secret-12345`).
-- **الخطورة**: توكنات الجلسات والـ media تبقى قابلة للتزوير، ونفس المفتاح مستخدم في تشفير بصمات الـ audit.
-- **الإصلاح في الكود**: أي قيمة ضعيفة **توقف التشغيل فورًا** برسالة واضحة في كل البيئات (dev/staging/prod)،
-  بدل التحذير الغامض اللي كان يظهر متأخرًا مع أول login.
+- `fileConfig()` في migrations كان يغيّر root logger إلى `WARNING` ويعطّل بعض `app.*` loggers؛ رسائل `INFO` مثل `Database migrations applied` و`Loading detection models` كانت تختفي بعد سطر Alembic. ده يفسّر “مفيش لوج في الباك” حتى لو التطبيق كان مستمرًا.
+- تم الحفاظ على الـ loggers ومستوى اللوج الأصلي، وإضافة سجلات لكل مرحلة من اتصال Alembic حتى اكتمال migration.
+- لو انتهى اللوج فعلًا عند خطوة في SQL Server، أُضيفت مهلة اتصال و`DB_MIGRATION_LOCK_TIMEOUT_MS` (افتراضيًا 15000ms) على SQL Server؛ بعد انتهاء المهلة يفشل startup برسالة قابلة للتشخيص بدل انتظار lock بلا نهاية.
+- لو ظهر lock timeout، أوقف أي نسخة API/Alembic أخرى وافحص معاملات SQL Server المفتوحة قبل إعادة المحاولة.
 
-### المشكلة 2: SQL Server محتاج Drivers إضافية
+### المشكلة 2: بث الكاميرا كان يُعتبر شغالًا لمجرد أن OpenCV فتح المصدر
 
-- سطر `MSSQLImpl` معناه إنك مش شغال على SQLite الافتراضية.
-- باكدج `requirements/base.txt` لا تشمل `aioodbc/pyodbc`، والـ ODBC Driver نفسه برنامج منفصل من Microsoft.
-- **الإصلاح في الكود**: ملف جديد `requirements/mssql.txt` + رسائل خطأ عربية/إنجليزية واضحة عند نقص أي Driver.
+- فتح `VideoCapture` لا يضمن أن `read()` يرجّع frame. وكان اللوب يتجاهل `None` بصمت، فيبقى المصدر “شغالًا” لكن بدون فيديو أو إحصائيات.
+- الآن تشغيل الكاميرا ينتظر أول frame مُعالج، ويُرجع سببًا مفهومًا إن لم يصل خلال المهلة. فشل قراءة الإطارات يُسجّل بتحذير محدود التكرار، والكاميرا القديمة التي لا يصل منها frame جديد لا تُعرض كأنها بث حي.
 
-### المشكلة 3: `--reload` يراقب كل المجلد (بطء وإعادة تشغيل عشوائية)
+### المشكلة 3: اتصال WebSocket قد يُرفض رغم أن صفحة الداشبورد من نفس السيرفر
 
-- الأمر الافتراضي يراقب كل المشروع بما فيه `.venv` و`violation_frames`، وده على Windows بطيء
-  وممكن يعمل reload متكرر.
-- **الحل**: راقب `app/` فقط (انظر قسم التشغيل الموصى به بالأسفل).
+- كان التحقق يقبل فقط origins المكتوبة في `CORS_ORIGINS`؛ لذلك الـ SPA المبنية والمقدمة من FastAPI على `127.0.0.1:8000` أو عنوان محلي آخر قد ترى إعادة اتصال مستمرة.
+- الآن يُسمح بالـ origin المدرج صراحة أو بنفس origin الطلب نفسه (scheme + host)، وتظل الطلبات cross-origin غير الموثوقة مرفوضة. كما تُسجل أسباب رفض/فتح WebSocket والبث في backend بدون تسجيل أي توكن.
 
-### المشكلة 4: أسرار dev العشوائية تتغير مع كل reload
+### المشكلة 4: JWT وSQL Server والتطوير المحلي
 
-- لو `JWT_SECRET`/`BOOTSTRAP_PASSWORD` مش مكتوبين في `.env`، السيرفر يولّد قيمًا عشوائية **تتغير مع كل reload**،
-  فتتسجّل خروج تلقائيًا وتتغير كلمة مرور الـ admin المطبوعة في اللوج.
-- **الحل**: ثبّت قيمًا قوية في `.env` (انظر الوصفة بالأسفل) — الباسورد المطبوعة لمرة واحدة تتغير إجباريًا عند أول دخول.
+- المفتاح `JWT_SECRET` القصير (أقل من 32 بايت) يُرفض برسالة واضحة؛ هذا **موضوع منفصل** عن تعليق Alembic.
+- `requirements/mssql.txt` يثبت `aioodbc/pyodbc`، لكن يلزم أيضًا تثبيت ODBC Driver من Microsoft على Windows.
+- شغّل Uvicorn مع `--reload-dir app` لتقليل مراقبة ملفات البيئة والإطارات.
+- أسرار التطوير العشوائية تتغير مع كل reload؛ ضع `JWT_SECRET` و`BOOTSTRAP_PASSWORD` ثابتين في `.env` المحلي.
+
+### مهم: معنى “كاميرا الويب مفتوحة”
+
+مصدر `webcam` يقرأ الكاميرا عبر OpenCV **داخل عملية Python التي تشغل الـ backend**، وليس عبر صلاحية الكاميرا في متصفح المستخدم. لذلك:
+
+- لازم تختار index صحيحًا (`0` غالبًا) على الجهاز الذي يعمل عليه الـ backend، وتسمح لـ Python في Windows Camera Privacy.
+- اقفل تطبيقات أخرى قد تكون ماسكة نفس الكاميرا.
+- إذا كان الـ backend داخل Docker، فالكاميرا المتصلة بجهازك لا تظهر للحاوية تلقائيًا؛ `docker-compose.dev.yml` لا يمرر جهاز webcam. شغّل backend على الجهاز المضيف أو استخدم كاميرا شبكة/مصدر فيديو مسموح.
+- ظهور `مباشر` مرتبط بقناة telemetry عبر WebSocket؛ الفيديو نفسه يصل عبر MJPEG. أصبحت أسباب رفض كل قناة ظاهرة في لوج backend.
 
 ---
 
@@ -110,8 +111,14 @@ pip install -r requirements/mssql.txt
 DATABASE_URL=mssql+aioodbc://USER:PASSWORD@HOST:1433/DBNAME?driver=ODBC+Driver+18+for+SQL+Server
 ```
 
-> لو لا تحتاج SQL Server محليًا، علّق هذا السطر وارجع للافتراضي:
-> `DATABASE_URL=sqlite+aiosqlite:///./ppe_detection.db`
+> لا تغيّر نوع قاعدة البيانات لمجرد تجربة التشغيل إذا كانت بياناتك في SQL Server؛ SQLite قاعدة منفصلة. استخدم SQLite فقط لو تقصد فعلًا قاعدة تطوير محلية جديدة.
+
+المهلة الافتراضية للاتصال 15 ثانية، وانتظار lock أثناء ترحيل SQL Server 15 ثانية. يمكن تعديلهما في `.env` بعد فحص سبب الانتظار:
+
+```env
+DB_MIGRATION_CONNECT_TIMEOUT_SECONDS=15
+DB_MIGRATION_LOCK_TIMEOUT_MS=15000
+```
 
 ### الخطوة 3: ولّد `JWT_SECRET` قوي وثبّته
 
@@ -158,6 +165,8 @@ python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port
 4. **لا تحذيرات**: اختفاء `InsecureKeyLengthWarning` تمامًا بعد تثبيت `JWT_SECRET` قوي.
 5. **الدخول**: سجّل دخول من الداشبورد (`npm run dev` في `frontend/` ثم `http://localhost:5173`)
    وغيّر الباسورد المؤقتة عند أول دخول.
+6. **تشغيل webcam**: بعد الضغط على تشغيل، راقب backend بحثًا عن `Opening camera source` ثم `Webcam 0 opened` و`first processed frame ready`. غياب أول سطر يعني أن الطلب لم يصل للـ backend؛ وظهور `no frame` يعني أن OpenCV فتح المصدر لكنه لا يقرأ إطارات.
+7. **اتصال مباشر**: في أدوات المطور للمتصفح، افحص `/api/v1/ws/<camera_id>`؛ يجب أن تكون WebSocket بحالة `101`. سيظهر سبب الرفض في backend من غير كشف بيانات الجلسة. طلب الفيديو هو `/api/v1/stream/<camera_id>` ويجب أن يكون `200` ونوعه `multipart/x-mixed-replace`.
 
 ---
 
@@ -168,6 +177,9 @@ python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port
 | `JWT_SECRET is too weak for HS256: it is 22 bytes long...` | نفّذ الخطوة 3 أعلاه |
 | `Database startup failed for mssql...` + `pip install -r requirements/mssql.txt` | نفّذ الخطوة 2 أعلاه |
 | `...ODBC driver...` / `Data source name not found` | ثبّت ODBC Driver 18 وتأكد من اسم السيرفر والبورت |
+| `lock timeout` أثناء Alembic | أوقف النسخ الأخرى التي تستخدم القاعدة، وافحص معاملات SQL Server المفتوحة، ثم أعد التشغيل |
+| `no video frame arrived in time` | راجع index/خصوصية الكاميرا، اقفل التطبيقات الأخرى، وتأكد أن backend يعمل على الجهاز الذي لديه webcam أو أن الجهاز ممرر للحاوية |
+| `Rejected WebSocket ... untrusted origin` | افتح الداشبورد من origin مضبوط في `CORS_ORIGINS` أو استخدم نفس origin الذي يقدم الـ SPA |
 | `Detection model weights not found ... Checked: ...` | ملف `.pt` ناقص — ضعه في `Model/` أو صحّح المسار في `.env` |
 | `The 'ultralytics' package is not installed...` | نفّذ الخطوة 1 (تثبيت الاعتماديات) |
 | `Frontend bundle not found — API-only mode` | **ليست مشكلة**: معناها أن الـ API شغال بدون واجهة مبنية — استخدم `npm run dev` للدشبورد |
@@ -179,9 +191,13 @@ python -m uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port
 ```env
 APP_ENV=dev
 DATABASE_URL=sqlite+aiosqlite:///./ppe_detection.db
+DB_MIGRATION_CONNECT_TIMEOUT_SECONDS=15
+DB_MIGRATION_LOCK_TIMEOUT_MS=15000
 JWT_SECRET=<من scripts/gen_jwt_secret.py>
 BOOTSTRAP_USERNAME=admin
 BOOTSTRAP_PASSWORD=<باسورد-قوية-مؤقتة-تتغير-عند-أول-دخول>
+CAMERA_FIRST_FRAME_TIMEOUT_SECONDS=10.0
+CAMERA_FRAME_STALE_SECONDS=15.0
 ALLOWED_RTSP_PREFIXES=
 ALLOWED_VIDEO_DIR=./videos
 ```

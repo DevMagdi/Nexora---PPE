@@ -22,6 +22,23 @@ router = APIRouter(tags=["stream"])
 MEDIA_SESSION_REVALIDATE_SECONDS = 5.0
 
 
+def _websocket_origin_is_allowed(websocket: WebSocket, origin: str) -> bool:
+    normalized_origin = origin.rstrip("/").lower()
+    if normalized_origin in {value.rstrip("/").lower() for value in settings.cors_origins}:
+        return True
+
+    # A dashboard served by FastAPI (rather than Vite) is same-origin with the
+    # API and should not need to duplicate its own URL in CORS_ORIGINS. The
+    # browser's Origin still has to match the request Host exactly.
+    forwarded_proto = websocket.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    if forwarded_proto in {"http", "https"}:
+        scheme = forwarded_proto
+    else:
+        scheme = {"ws": "http", "wss": "https"}.get(websocket.url.scheme.lower(), "")
+    host = websocket.headers.get("host", "").strip().lower()
+    return bool(scheme and host and normalized_origin == f"{scheme}://{host}")
+
+
 async def _media_session_is_current(user_id: int, token_version: int) -> bool:
     async with AsyncSessionLocal() as db:
         user = await db.get(User, user_id)
@@ -42,29 +59,36 @@ async def _mjpeg_generator(
 ):
     boundary = b"--frame"
     last_seq = -1
+    first_frame_sent = False
     media_expires_at = getattr(request.state, "media_expires_at", None)
     last_session_check = time.monotonic()
-    while manager.is_running(camera_id):
-        if media_expires_at and datetime.now(UTC) >= media_expires_at:
-            break
-        if time.monotonic() - last_session_check >= MEDIA_SESSION_REVALIDATE_SECONDS:
-            if not await _media_session_is_current(user_id, token_version):
+    try:
+        while manager.is_running(camera_id):
+            if media_expires_at and datetime.now(UTC) >= media_expires_at:
                 break
-            last_session_check = time.monotonic()
-        if await request.is_disconnected():
-            break
-        frame, seq = manager.get_latest_frame_with_seq(camera_id)
-        if frame and seq != last_seq:
-            last_seq = seq
-            yield (
-                boundary
-                + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                + str(len(frame)).encode()
-                + b"\r\n\r\n"
-                + frame
-                + b"\r\n"
-            )
-        await asyncio.sleep(settings.STREAM_FPS_DELAY_SECONDS)
+            if time.monotonic() - last_session_check >= MEDIA_SESSION_REVALIDATE_SECONDS:
+                if not await _media_session_is_current(user_id, token_version):
+                    break
+                last_session_check = time.monotonic()
+            if await request.is_disconnected():
+                break
+            frame, seq = manager.get_latest_frame_with_seq(camera_id)
+            if frame and seq != last_seq:
+                last_seq = seq
+                if not first_frame_sent:
+                    first_frame_sent = True
+                    logger.info("MJPEG stream sent its first frame (camera_id=%s)", camera_id)
+                yield (
+                    boundary
+                    + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(frame)).encode()
+                    + b"\r\n\r\n"
+                    + frame
+                    + b"\r\n"
+                )
+            await asyncio.sleep(settings.STREAM_FPS_DELAY_SECONDS)
+    finally:
+        logger.info("MJPEG stream ended (camera_id=%s)", camera_id)
 
 
 @router.get("/stream/{camera_id}")
@@ -82,8 +106,10 @@ async def mjpeg_stream(
 
     manager: CameraManager = get_camera_manager(request)
     if not manager.is_running(camera_id):
+        logger.warning("MJPEG request rejected: camera_id=%s has no live frames", camera_id)
         raise HTTPException(status_code=404, detail="Camera not running")
 
+    logger.info("MJPEG client connected to live camera (camera_id=%s)", camera_id)
     return StreamingResponse(
         _mjpeg_generator(manager, camera_id, request, user.id, user.token_version),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -102,11 +128,13 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
         and websocket.url.scheme != "wss"
         and websocket.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() != "https"
     ):
+        logger.warning("Rejected insecure WebSocket for camera_id=%s in production", camera_id)
         await websocket.close(code=1008, reason="Secure WebSocket required")
         return
 
     origin = websocket.headers.get("origin")
-    if origin and origin.rstrip("/") not in settings.cors_origins:
+    if origin and not _websocket_origin_is_allowed(websocket, origin):
+        logger.warning("Rejected WebSocket for camera_id=%s: untrusted origin", camera_id)
         await websocket.close(code=1008, reason="Untrusted origin")
         return
 
@@ -116,6 +144,7 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
     try:
         payload = decode_token_payload(token, expected_type="media")
     except HTTPException:
+        logger.warning("Rejected WebSocket for camera_id=%s: missing or invalid media session", camera_id)
         await websocket.close(code=1008, reason="Invalid or missing media session")
         return
 
@@ -129,14 +158,17 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
             or user.token_version != int(payload.get("ver", 0))
             or cam is None
         ):
+            logger.warning("Rejected WebSocket for camera_id=%s: invalid session or camera", camera_id)
             await websocket.close(code=1008, reason="Invalid session or camera")
             return
         if user.sector != "both" and cam.profile != user.sector:
+            logger.warning("Rejected WebSocket for camera_id=%s: sector access denied", camera_id)
             await websocket.close(code=1008, reason="Forbidden")
             return
 
     manager: CameraManager = websocket.app.state.camera_manager
     if not manager.is_running(camera_id):
+        logger.warning("Rejected WebSocket for camera_id=%s: no live camera frames", camera_id)
         await websocket.close(code=1008, reason="Camera not running")
         return
 
@@ -146,6 +178,7 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
     # Authentication, activity, token version, camera existence, sector, and
     # camera state are checked before the WebSocket handshake is accepted.
     await websocket.accept()
+    logger.info("WebSocket connected to live camera stream (camera_id=%s)", camera_id)
     q = manager.subscribe(camera_id)
     close_reason: str | None = None
     try:
@@ -174,3 +207,4 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
         logger.warning("WebSocket stream ended unexpectedly for camera_id=%s", camera_id)
     finally:
         manager.unsubscribe(camera_id, q)
+        logger.info("WebSocket disconnected from live camera stream (camera_id=%s)", camera_id)

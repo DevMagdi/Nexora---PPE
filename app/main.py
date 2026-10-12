@@ -65,9 +65,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Fail closed: schema updates are versioned and applied before the app starts.
     logger.info("Applying database migrations...")
-    await upgrade_database()
+    try:
+        await upgrade_database()
+    except Exception:
+        logger.exception("Database migration failed; API startup is stopping before camera initialization.")
+        raise
     logger.info("Database migrations applied")
-    await init_db()
+    logger.info("Verifying application database connection and schema...")
+    try:
+        await init_db()
+    except Exception:
+        logger.exception("Database schema verification failed after Alembic; API startup is stopping.")
+        raise
     logger.info("Database schema is up to date")
 
     from app.db.repository import ensure_bootstrap_user
