@@ -16,7 +16,7 @@ export default function AppShell({ tab, sidebarProps, topbarProps, children }: A
       <Sidebar {...sidebarProps} />
       <main className="flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
         <Topbar {...topbarProps} />
-        <div key={tab} className="flex-1 animate-page-in overflow-y-auto p-5 lg:p-10">
+        <div key={tab} className="flex-1 animate-page-in overflow-y-auto p-4 sm:p-6 lg:p-8 xl:p-10">
           {children}
         </div>
       </main>
