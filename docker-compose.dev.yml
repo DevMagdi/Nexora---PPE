@@ -10,7 +10,7 @@ services:
       APP_ENV: dev
       DATABASE_URL: sqlite+aiosqlite:///./ppe_detection.db
       CONSTRUCTION_MODEL_PATH: Model/ppe.pt
-      MEDICAL_MODEL_PATH: Model/bestMedicalModel.pt
+      MEDICAL_MODEL_PATH: Model/bestMedicalModel_FINAL.pt
       HYBRID_DETECTION_ENABLED: "true"
     volumes:
       - ./app:/app/app

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ def is_skin_source(source: str | None) -> bool:
     وده فنيًا كشف موديل مؤكَّد وثقته كاملة في منطق المخالفات، مش كشف صناعي.
     """
     return bool(source) and source.startswith(SOURCE_SKIN_PREFIX)
+
 
 # ألوان (نغطي construction + medical names)
 CLASS_COLORS_BY_NAME = {
@@ -102,12 +104,22 @@ class Detection:
 # للبديل المعتمد، فإعدادات المستخدمين القديمة تكمل شغل من غير تدخل يدوي.
 RETIRED_MODEL_PATHS: tuple[str, ...] = (
     "Model/bestMedicalModel2.pt",
+    # 2026-10-12: الوزن الطبي القديم اترفد لصالح bestMedicalModel_FINAL.pt
+    # (recall و mAP أعلى، ونفس ترتيب الفئات بالكامل).
+    "Model/bestMedicalModel.pt",
 )
 
 # خريطة الترحيل: وزن مرفود -> البديل المعتمد
 MODEL_MIGRATIONS: dict[str, str] = {
-    "Model/bestMedicalModel2.pt": "Model/bestMedicalModel.pt",
+    "Model/bestMedicalModel2.pt": "Model/bestMedicalModel_FINAL.pt",
+    "Model/bestMedicalModel.pt": "Model/bestMedicalModel_FINAL.pt",
 }
+
+# أوزان مرفودة البديل بتاعها بيحافظ على **نفس** ترتيب وأرقام الفئات (class ids).
+# في الحالة دي خريطة عتبات الثقة لكل فئة اللي ضبطها المستخدم تفضل صحيحة بعد
+# الترحيل، وبالتالي ممنوع تتشال. أي وزن مرفود مش موجود هنا (زي
+# ``bestMedicalModel2.pt``) ترتيب فئاته مختلف، فتتشال خريطته القديمة بالكامل.
+CLASS_ID_COMPATIBLE_RETIRED_PATHS: frozenset[str] = frozenset({"Model/bestMedicalModel.pt"})
 
 
 def _normalize_model_path(path: str | None) -> str:
@@ -126,9 +138,7 @@ def is_retired_model_path(path: str | None) -> bool:
         return False
     normalized = _normalize_model_path(path)
     retired_normalized = {_normalize_model_path(p) for p in RETIRED_MODEL_PATHS}
-    retired_basenames = {
-        os.path.basename(_normalize_model_path(p)) for p in RETIRED_MODEL_PATHS
-    }
+    retired_basenames = {os.path.basename(_normalize_model_path(p)) for p in RETIRED_MODEL_PATHS}
     return normalized in retired_normalized or os.path.basename(normalized) in retired_basenames
 
 
@@ -147,6 +157,80 @@ def migrate_model_path(path: str) -> str:
             )
             return replacement
     return path
+
+
+def migration_preserves_class_ids(path: str | None) -> bool:
+    """
+    هل ترحيل المسار ده بيحافظ على أرقام/ترتيب الفئات؟
+
+    ``True`` يعني إن البديل المعتمد ليه نفس ترتيب الفئات تمامًا، فخريطة عتبات
+    الثقة لكل فئة (لو المستخدم ضبطها) تفضل سارية بعد الترحيل ومش لازم تتشال.
+    """
+    if not path:
+        return False
+    normalized = _normalize_model_path(path)
+    return any(
+        _normalize_model_path(p) == normalized
+        or os.path.basename(_normalize_model_path(p)) == os.path.basename(normalized)
+        for p in CLASS_ID_COMPATIBLE_RETIRED_PATHS
+    )
+
+
+def _load_yolo_weights(YOLO, resolved_path: str, *, setting_name: str = ""):
+    """
+    يحمّل الأوزان وبيحوّل أي فشل تحميل لرسالة تشغيلية واضحة.
+
+    لوج حقيقي (2026-10-12) طلّع ``OSError: [Errno 22] Invalid argument`` لما
+    ``.pt`` كان مبتور (ترانسفير ناقص أو نسخة قديمة). الرسالة دي مش بتقول للمشغّل
+    لا الملف ولا السبب. هنا بنفحص إن الملف مش فاضي ونغلّف خطأ ultralytics
+    برسالة فيها المسار + اسم الإعداد + خطوات الإصلاح.
+    """
+    where = f" (setting {setting_name})" if setting_name else ""
+    try:
+        size = os.path.getsize(resolved_path)
+    except OSError:
+        # المسار مش ملف على الـ Disk (URI أو مسار بيتحل جوّه ultralytics) — نسيب
+        # التحقق لـ ultralytics نفسه بدل ما نفشل تحميلًا سليمًا
+        size = None
+    if size == 0:
+        raise RuntimeError(
+            f"Detection weights {resolved_path!r}{where} are empty (0 bytes) — the file is "
+            "truncated or the copy/download failed. Re-copy Model/*.pt (see "
+            "docs/LOCAL_RUN_TROUBLESHOOTING_AR.md)."
+        )
+    try:
+        return YOLO(resolved_path)
+    except Exception as exc:  # noqa: BLE001 - نعيد الرمي برسالة واضحة مع السبب الأصلي
+        raise RuntimeError(
+            f"Failed to load detection weights {resolved_path!r}{where}: "
+            f"{type(exc).__name__}: {exc}. The weight file is empty, truncated, corrupt, or not "
+            "a YOLO checkpoint. Re-copy it from the repository (or re-export it), then restart "
+            "the service. See docs/LOCAL_RUN_TROUBLESHOOTING_AR.md."
+        ) from exc
+
+
+def weight_fingerprint(path: str) -> dict[str, object]:
+    """
+    بصمة الأوزان المحمّلة فعلًا: اسم الملف، الحجم، و SHA-256.
+
+    الهدف تشغيلي: السجل (log) يقول بالظبط أنهي ملف أوزان اشتغل، حتى لو فيه نسخة
+    قديمة في مكان تاني أو مسار في ``.env`` اتحوّل بالترحيل الآمن. القراءة chunked
+    (1 MiB) عشان ما تحمّلش الملف كله في الذاكرة، والبايتات بتتقرأ من غير أي
+    unpickle (مفيش تنفيذ كود من ملف الأوزان).
+    """
+    resolved = os.path.realpath(path) if os.path.exists(path) else path
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1 << 20):
+            digest.update(chunk)
+            size += len(chunk)
+    return {
+        "path": path,
+        "real_path": resolved,
+        "size_bytes": size,
+        "sha256": digest.hexdigest(),
+    }
 
 
 def resolve_model_path(model_path: str, fallbacks: tuple[str, ...] = ()) -> str:
@@ -209,9 +293,11 @@ def sanitize_class_conf_thresholds(
     ينظّف خريطة عتبات الثقة لكل فئة بعد ترحيل الأوزان.
 
     * لو الموديل نفسه جاي من مسار مرفود (مثل ``bestMedicalModel2.pt``) وتم
-      ترحيله تلقائيًا إلى ``bestMedicalModel.pt``، فترتيب وأرقام الفئات تغيّر
+      ترحيله تلقائيًا إلى ``bestMedicalModel_FINAL.pt``، فترتيب وأرقام الفئات تغيّر
       بالكامل حتى لو الأرقام ما زالت داخل ``0..10`` — لذلك نُسقط الخريطة القديمة
       بالكامل حتى لا تُفرض عتبة 0.70 على الفئات الموجبة (`hand gloves` / `mask`).
+      (الترحيل ``bestMedicalModel.pt -> _FINAL`` مستثنى لأن ترتيب الفئات متطابق،
+      انظر ``CLASS_ID_COMPATIBLE_RETIRED_PATHS``.)
     * في الحالات العادية، نرمي أي id غير موجود في الموديل المحمّل ونسجّله.
     """
     if not thresholds:
@@ -357,16 +443,34 @@ class PPEDetector:
                 "Install backend dependencies with `pip install -r requirements.txt`."
             ) from exc
 
-        self.model = YOLO(resolved_path)
+        self.model = _load_yolo_weights(YOLO, resolved_path, setting_name=setting_name)
         self.confidence = confidence
         self.default_class_conf = default_class_conf
         model_label = os.path.basename(resolved_path)
-        # بعد ترحيل الأوزان: لو المسار الأصلي مرفود تتشال خريطة الـ class ids القديمة بالكامل،
-        # وفي الحالات العادية تتشال أي فئة غير موجودة في الموديل
+        # بصمة الأوزان الفعلية (اسم + حجم + SHA-256) — تسجّل في اللوج عشان يبقى
+        # واضح أنهي نسخة أوزان شغالة فعلًا بعد أي ترحيل آمن
+        try:
+            self.weights_fingerprint = weight_fingerprint(resolved_path)
+        except OSError as exc:  # ملف اتقرأ في التحميل لكن اتمسح/اتقفل بعد كده
+            self.weights_fingerprint = {"path": resolved_path, "error": str(exc)}
+        # بعد ترحيل الأوزان: لو المسار الأصلي مرفود **بترتيب فئات مختلف** تتشال
+        # خريطة الـ class ids القديمة بالكامل (لأن أرقامها بقت معنى تاني). أما لو
+        # الترحيل بيحافظ على نفس ترتيب الفئات (bestMedicalModel.pt -> _FINAL)
+        # فالعتبات اللي المستخدم ضبطها تفضل سارية وفي الحالات العادية تتشال أي
+        # فئة غير موجودة في الموديل
+        migrated_from_retired = is_retired_model_path(
+            model_path
+        ) and not migration_preserves_class_ids(model_path)
+        if migrated_from_retired:
+            logger.warning(
+                "Configured model '%s' is retired with incompatible class ids; "
+                "per-class thresholds will be discarded",
+                model_path,
+            )
         self.class_conf = sanitize_class_conf_thresholds(
             self.model.names,
             settings.parse_class_thresholds_str(class_conf_thresholds),
-            migrated_from_retired=is_retired_model_path(model_path),
+            migrated_from_retired=migrated_from_retired,
         )
         # حاجز الدقة: عتبات أقل من الأرضية الدنيا بتترفع تلقائيًا (بلوج تحذيري)
         self.confidence, self.class_conf = apply_confidence_floor(
@@ -394,6 +498,7 @@ class PPEDetector:
         self._lock = threading.Lock()
 
         logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, self.confidence)
+        logger.info("Weights fingerprint: %s", self.weights_fingerprint)
         logger.info("Default class conf: %.2f", self.default_class_conf)
         logger.info("Class-specific conf map: %s", self.class_conf)
         logger.info("Model classes: %s", self.model.names)

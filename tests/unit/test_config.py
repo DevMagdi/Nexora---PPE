@@ -9,7 +9,8 @@ def test_defaults():
     s = Settings(_env_file=None)
     assert s.APP_ENV == "dev"
     assert s.CONSTRUCTION_MODEL_PATH == "Model/ppe.pt"
-    assert s.MEDICAL_MODEL_PATH == "Model/bestMedicalModel.pt"
+    # 2026-10-12: الوزن الطبي المعتمد بقى bestMedicalModel_FINAL.pt
+    assert s.MEDICAL_MODEL_PATH == "Model/bestMedicalModel_FINAL.pt"
     assert s.CAMERA_CAPTURE_BUFFER_SIZE == 1
     # الافتراضيات اترفعت لحارس الدقة (precision floor) — كانت 0.10/0.15
     assert s.CONSTRUCTION_DETECTION_CONFIDENCE == pytest.approx(0.25)

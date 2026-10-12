@@ -4,7 +4,7 @@
 
 Nexora runs as a self-contained on-premise installation, connects to existing cameras (**RTSP / IP cameras, Webcams, or Video Files**), runs real-time AI detection using dedicated **Ultralytics YOLO** models per sector, and serves an Arabic RTL React dashboard with annotated video and WebSocket telemetry. Alerts are stored locally by default; optional SMTP/HTTP integrations are customer-configured and not required for operation.
 
-For a careful analysis of the browser console messages, bundled model metadata/metrics, and low-latency configuration, see [docs/CONSOLE_AND_MODEL_REVIEW_AR.md](docs/CONSOLE_AND_MODEL_REVIEW_AR.md).
+For a careful analysis of the browser console messages, bundled model metadata/metrics, and low-latency configuration, see [docs/CONSOLE_AND_MODEL_REVIEW_AR.md](docs/CONSOLE_AND_MODEL_REVIEW_AR.md). For the approved medical weights (fingerprints, recorded training metrics, and the full stress-test campaign), see [docs/MEDICAL_MODEL_FINAL_VALIDATION_AR.md](docs/MEDICAL_MODEL_FINAL_VALIDATION_AR.md).
 
 ![Nexora Dashboard](Visuals/ppe-public-view.png)
 
@@ -14,13 +14,15 @@ For a careful analysis of the browser console messages, bundled model metadata/m
 
 - **Smart Hybrid AI Engine (`construction` + `medical` fused):**
   - **Construction Model (`Model/ppe.pt`):** Detects `Person`, `Hardhat` / `NO-Hardhat`, `Safety Vest` / `NO-Safety Vest`, `Mask` / `NO-Mask`, `Gloves` / `NO-Gloves`, `Safety Boots` / `NO-Safety Boots`, and `Goggles` / `NO-Goggles` with person-bounding-box IoU association.
-  - **Medical Model (`Model/bestMedicalModel.pt`):** Detects `mask` / `no mask`, `hand gloves` / `no hand gloves`, `head cap` / `no head cap`, `goggle` / `no goggle`, `lab coat`, `full cover`, and `shoe cover` with grace-period debouncing.
+  - **Medical Model (`Model/bestMedicalModel_FINAL.pt`):** Detects `mask` / `no mask`, `hand gloves` / `no hand gloves`, `head cap` / `no head cap`, `goggle` / `no goggle`, `lab coat`, `full cover`, and `shoe cover` with grace-period debouncing. The approved weight is a `yolov8n` fine-tune (80 epochs, imgsz 640) whose **recorded** checkpoint metrics are `P=0.65722 / R=0.69529 / mAP@0.50=0.72192 / mAP@0.50:0.95=0.44679` — higher recall and mAP than the retired weight (`0.77794 / 0.59169 / 0.68694 / 0.41147`) at a slightly lower precision. Those numbers come from the checkpoint metadata, so calibrate thresholds per site before relying on them operationally.
   - **`HybridPPEDetector` (`app/core/hybrid_detector.py`):** Runs **both** YOLO models on the same frame, normalises every class name to one canonical vocabulary (`no goggle` ≡ `NO-Goggles`), merges duplicate boxes with **cross-model confidence fusion**, resolves positive/negative conflicts, and feeds a single detection list to the existing checkers. Medical cameras finally get a `Person` class (the medical model has none), so PPE items can be associated with staff and "staff present but lab coat missing" works out of the box.
   - **Construction → Medical Bridge (`_bridge_construction_to_medical`):** When a medical camera borrows the construction model, only what the medical profile can use crosses over — `Person` plus the shared items (Mask / Goggles / Gloves). Construction-only classes (Hardhat, Safety Vest, Safety Boots) are dropped before they can pollute medical counters, and the crossing count is published as `bridged` in the hybrid stats. A final **medical firewall** in `detect()` drops construction-only classes from *any* source, and `MedicalViolationChecker` ignores them defensively — a medical camera can never report a missing hardhat/vest/boots.
   - **Anatomical Eye Bridge (`_append_anatomical_eye_bridge`):** On medical cameras running *without* any `Person` box (e.g. `HYBRID_CONSTRUCTION_ON_MEDICAL=false`), every `Mask` detection is used as an anatomical anchor — the eye line sits directly above the mask, so the nose-bridge test still runs and can emit `NO-Goggles` (`skin:anatomical_bridge`).
   - **Glove reject ratio (`SKIN_GLOVE_REJECT_RATIO`, default `0.24`):** A `Gloves` box whose region contains **≥ 24 %** thick exposed skin (distanceTransform) is a fake glove and is downgraded to `NO-Gloves` — stricter than the generic `SKIN_STRONG_RATIO` because a real glove never shows skin in its middle.
   - **Precision guards (`SKIN_*` guard settings):** Skin heuristics are evidence helpers, not models — so their output is confidence-capped (`SKIN_SYNTHETIC_MAX_CONF`, default `0.85`), a skin-sourced negative only counts as *violation evidence* at `≥ SKIN_NEGATIVE_MIN_CONF` (`0.70`), the anatomical scans only anchor on a reliable `Person` (`SKIN_MIN_PERSON_CONF`, `0.35`), and dropping a model positive (Mask/Goggles/Gloves) now needs a strong heuristic (`SKIN_POSITIVE_OVERRIDE_MIN_CONF`, `0.70`) and only works on positives below `SKIN_POSITIVE_OVERRIDE_MAX_CONF` (`0.60`). A model detection confirmed by skin (`model:x+skin:y`) keeps its full evidence weight. On top of that, `DETECTION_CONFIDENCE_FLOOR` (`0.25`) automatically raises any configured inference/class threshold below it (with a log warning), so stale low settings like `0.05`/`0.10` can't flood the system with false detections.
-  - **Safe Weight Migration (`RETIRED_MODEL_PATHS`):** Legacy weights (e.g. the removed `Model/bestMedicalModel2.pt`) can never be loaded again: any `.env` still pointing at them is redirected to the approved replacement automatically, retired paths are skipped in fallback lists, and `sanitize_class_conf_thresholds` drops per-class confidence thresholds whose class ids do not exist in the loaded model.
+  - **Safe Weight Migration (`RETIRED_MODEL_PATHS`):** Legacy weights (`Model/bestMedicalModel2.pt` and the superseded `Model/bestMedicalModel.pt`) can never be loaded again: any `.env` still pointing at them is redirected to the approved replacement automatically, retired paths are skipped in fallback lists, and `sanitize_class_conf_thresholds` drops per-class confidence thresholds whose class ids do not exist in the loaded model. Because the retired `bestMedicalModel.pt` shares the exact class-id order with `bestMedicalModel_FINAL.pt`, `migration_preserves_class_ids` keeps your `MEDICAL_CLASS_CONF_THRESHOLDS` map instead of discarding it.
+  - **Weights fingerprint at startup:** every `PPEDetector` logs the real path, size and SHA-256 of the weights it actually loaded (`weight_fingerprint`), so a stale copy or a migrated `.env` entry can never go unnoticed.
+  - **Actionable load failures:** an empty, truncated or corrupt `.pt` (half-finished copy/transfer) fails fast with a message naming the file, the setting (`MEDICAL_MODEL_PATH` / `CONSTRUCTION_MODEL_PATH`) and the fix — instead of an obscure `OSError: [Errno 22] Invalid argument`.
 - **Smart Skin Layer (`app/core/skin_analysis.py`):** Adds deterministic OpenCV evidence on top of the models:
   - **`calc_skin_ratio`** — dual-threshold (HSV + YCrCb) skin pixel ratio per region.
   - **Bare-hand detection with `distanceTransform`** — a real bare hand is a *thick* skin blob; gloved hands and stray skin (wrists/arms/background) are not. Confirms `NO-Gloves`, downgrades fake `Gloves`, and scans for bare hands when the models report no glove box at all.
@@ -52,9 +54,10 @@ Nexora---PPE/
 │   └── main.py            # FastAPI application factory, lifespan, and SPA static serving
 ├── frontend/              # React 19 + TypeScript + Vite + Tailwind CSS v4 dashboard
 ├── migrations/            # Alembic database migrations (SQLite, PostgreSQL, SQL Server)
-├── Model/                 # Bundled YOLO weights (ppe.pt, bestMedicalModel.pt)
-│                          #   bestMedicalModel2.pt was RETIRED — stale .env entries are
-│                          #   auto-migrated to bestMedicalModel.pt (safe weight migration)
+├── Model/                 # Bundled YOLO weights (ppe.pt, bestMedicalModel_FINAL.pt)
+│                          #   bestMedicalModel2.pt and bestMedicalModel.pt were RETIRED —
+│                          #   stale .env entries are auto-migrated to bestMedicalModel_FINAL.pt
+│                          #   (safe weight migration); see docs/MEDICAL_MODEL_FINAL_VALIDATION_AR.md
 ├── docker/                # Multi-stage production Dockerfile & development Dockerfile.dev
 ├── tests/                 # Unit and integration test suites (pytest + httpx AsyncClient)
 ├── docker-compose.yml     # Production stack (FastAPI + React SPA + PostgreSQL 16)
@@ -165,7 +168,7 @@ Bare-metal deployments must meet the same requirements as Compose: explicit rand
 | `LOGIN_LOCKOUT_ATTEMPTS` / `LOGIN_LOCKOUT_MINUTES` | `5` / `15` | Persistent temporary user lock after repeated failures |
 | `BACKUP_ENCRYPTION_KEY` | Empty | Explicit URL-safe 256-bit key required in production for AES-GCM database backups |
 | `CONSTRUCTION_MODEL_PATH` | `Model/ppe.pt` | Path to YOLO weights for construction cameras |
-| `MEDICAL_MODEL_PATH` | `Model/bestMedicalModel.pt` | Path to YOLO weights for medical cameras |
+| `MEDICAL_MODEL_PATH` | `Model/bestMedicalModel_FINAL.pt` | Path to YOLO weights for medical cameras. The retired `Model/bestMedicalModel.pt` is auto-migrated to this file |
 | `CAMERA_CAPTURE_BUFFER_SIZE` | `1` | Best-effort OpenCV buffer depth for live webcam/RTSP sources; `1` favors fresh frames over stale queued frames |
 | `HYBRID_DETECTION_ENABLED` | `true` | Fuse the construction + medical models in one `HybridPPEDetector` per camera profile |
 | `HYBRID_CONSTRUCTION_ON_MEDICAL` | `true` | Run the construction model alongside medical cameras (adds `Person` + association) |
@@ -203,7 +206,7 @@ Bare-metal deployments must meet the same requirements as Compose: explicit rand
 
 ```text
 frame ─┬─► construction YOLO (ppe.pt)          ─┐
-       └─► medical YOLO (bestMedicalModel.pt)  ─┤
+       └─► medical YOLO (bestMedicalModel_FINAL.pt) ─┤
                                                 ▼
                      canonicalise names + construction→medical bridge (medical cams)
                                                 ▼
@@ -253,6 +256,13 @@ pytest tests/unit/test_skin_analysis.py tests/unit/test_hybrid_detector.py \
        tests/unit/test_hybrid_bridge.py tests/unit/test_hybrid_anatomical.py \
        tests/unit/test_glove_reject.py tests/unit/test_weight_migration.py \
        tests/unit/test_display_filter.py tests/unit/test_precision_guards.py -v
+
+# static forensics on the approved medical weights (zip/pickle inspection, no torch needed)
+pytest tests/unit/test_medical_model_final.py -v
+
+# real CPU inference against the approved weights (needs ultralytics/torch/cv2)
+pytest tests/integration/test_medical_model_inference.py -v
+pytest -m "not slow" tests/integration/test_medical_model_inference.py   # fast subset
 ```
 
 ---
@@ -280,12 +290,28 @@ pytest tests/unit/test_skin_analysis.py tests/unit/test_hybrid_detector.py \
   مرتين لكل استعلام — وترقية SQLAlchemy لـ `≥ 2.0.50` شالت تحذير SQL Server 2025
   (`Unrecognized server version info '17.0.1000.7'`).
 
+### اعتماد الوزن الطبي الجديد (2026-10-12 — bestMedicalModel_FINAL.pt)
+
+- **الوزن المعتمد بقى `Model/bestMedicalModel_FINAL.pt`:** نفس معمارية `yolov8n` ونفس الفئات الـ 11
+  بنفس الترتيب. المقاييس المسجلة جوه الـ checkpoint: `P=0.65722 / R=0.69529 / mAP@0.50=0.72192 /
+  mAP@0.50:0.95=0.44679` مقابل `P=0.77794 / R=0.59169 / mAP@0.50=0.68694 / mAP@0.50:0.95=0.41147`
+  للوزن القديم — يعني recall و mAP أعلى ومقايضة في precision.
+- **الوزن القديم `Model/bestMedicalModel.pt` اترفد واتشال من المستودع:** أي `.env` قديم بيشير له
+  بيتحوّل تلقائيًا للوزن المعتمد، وممنوع يتحمّل تاني. ولأن ترتيب الفئات متطابق، عتبات
+  `MEDICAL_CLASS_CONF_THRESHOLDS` اللي ضبطتها **بتفضل سارية** بعد الترحيل.
+- **بصمة الأوزان في اللوج:** كل تحميل موديل بيسجّل المسار والحجم و SHA-256 الفعليين، فأي نسخة قديمة
+  في مكان تاني بتظهر فورًا.
+- **رسائل فشل واضحة للأوزان التالفة:** ملف `.pt` فاضي/مبتور كان بيطلع `OSError: [Errno 22]` غامض،
+  دلوقتي بيطلع رسالة فيها اسم الملف + الإعداد (`MEDICAL_MODEL_PATH`) + طريقة الإصلاح.
+- التقرير الكامل (بصمات، مقارنة تدريب، 68 فحص تشغيل، قياسات زمن وذاكرة، وحدود):
+  [docs/MEDICAL_MODEL_FINAL_VALIDATION_AR.md](docs/MEDICAL_MODEL_FINAL_VALIDATION_AR.md).
+
 ### تحديث الكشف الهجين (Hybrid Detection)
 
-- **ترحيل آمن للأوزان:** الوزن القديم `Model/bestMedicalModel2.pt` اتشال نهائيًا، وأي إعداد قديم
-  في `.env` يشير إليه بيتحوّل تلقائيًا إلى `Model/bestMedicalModel.pt`. كمان عتبات الثقة لكل فئة
-  (`*_CLASS_CONF_THRESHOLDS`) بتتنضّف من أي رقم فئة مش موجود في الموديل المحمّل، فمفيش عتبة قديمة
-  هتتلزق على فئة تانية بالغلط.
+- **ترحيل آمن للأوزان:** الأوزان القديمة (`Model/bestMedicalModel2.pt` و `Model/bestMedicalModel.pt`)
+  اتشالت نهائيًا، وأي إعداد قديم في `.env` بيشير لها بيتحوّل تلقائيًا إلى
+  `Model/bestMedicalModel_FINAL.pt`. كمان عتبات الثقة لكل فئة (`*_CLASS_CONF_THRESHOLDS`) بتتنضّف من
+  أي رقم فئة مش موجود في الموديل المحمّل، فمفيش عتبة قديمة هتتلزق على فئة تانية بالغلط.
 - **الجسر الإنشائي (construction → medical):** كاميرات القطاع الطبي اللي بتستعين بالموديل الإنشائي
   بياخدوا منه `Person` والقطع المشتركة بس (كمامة/نظارة/جوانتي) — الخوذة والفيست والبوت فئات إنشائية
   خالصة وبتسقط قبل العدادات والعرض.

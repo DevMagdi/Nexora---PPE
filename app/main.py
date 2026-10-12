@@ -121,7 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.MEDICAL_DETECTION_CONFIDENCE,
         settings.MEDICAL_DEFAULT_CLASS_CONF,
         settings.MEDICAL_CLASS_CONF_THRESHOLDS,
-        fallbacks=("Model/ppe_medical.pt",),
+        fallbacks=("Model/bestMedicalModel_FINAL.pt", "Model/ppe_medical.pt"),
         setting_name="MEDICAL_MODEL_PATH",
     )
 

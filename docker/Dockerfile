@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements/prod.txt
 COPY app/ app/
 COPY migrations/ migrations/
 COPY alembic.ini ./
-COPY Model/ppe.pt Model/bestMedicalModel.pt Model/
+COPY Model/ppe.pt Model/bestMedicalModel_FINAL.pt Model/
 
 # Copy built React SPA from Stage 1
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
