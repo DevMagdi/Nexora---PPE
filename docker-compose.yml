@@ -18,7 +18,7 @@ services:
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Run scripts/setup_onprem.py first}
       BACKUP_DIR: /var/nexora/backups
       CONSTRUCTION_MODEL_PATH: Model/ppe.pt
-      MEDICAL_MODEL_PATH: Model/bestMedicalModel.pt
+      MEDICAL_MODEL_PATH: Model/bestMedicalModel_FINAL.pt
       HYBRID_DETECTION_ENABLED: "true"
     env_file:
       - .env

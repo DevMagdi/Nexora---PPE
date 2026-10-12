@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     CONSTRUCTION_CLASS_CONF_THRESHOLDS: str = ""
 
     # Medical Model
-    MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel.pt"
+    MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel_FINAL.pt"
     MEDICAL_DETECTION_CONFIDENCE: float = 0.25
     MEDICAL_DEFAULT_CLASS_CONF: float = 0.35
     MEDICAL_CLASS_CONF_THRESHOLDS: str = ""

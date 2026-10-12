@@ -13,7 +13,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="Model/bestMedicalModel.pt",
+        default="Model/bestMedicalModel_FINAL.pt",
         help="Path to YOLO model weights (.pt)",
     )
     parser.add_argument(

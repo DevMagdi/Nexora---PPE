@@ -76,3 +76,73 @@ def test_unknown_scheme_hint_lists_supported_backends():
     hint = database_startup_hint("oracle://u:p@h/db", RuntimeError("boom"))
     assert "sqlite+aiosqlite" in hint
     assert "oracle" in hint
+
+
+def _mock_ultralytics(monkeypatch, side_effect=None):
+    import sys
+    from unittest.mock import MagicMock
+
+    fake_ultralytics = MagicMock()
+    if side_effect is not None:
+        fake_ultralytics.YOLO.side_effect = side_effect
+    else:
+        fake_model = MagicMock()
+        fake_model.names = {0: "mask", 1: "no mask"}
+        fake_ultralytics.YOLO.return_value = fake_model
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultralytics)
+    return fake_ultralytics
+
+
+def test_empty_weight_file_fails_fast_with_actionable_message(tmp_path, monkeypatch):
+    """ملف أوزان فاضي (نسخة/تحميل ناقص) لازم يطلع رسالة واضحة مش Errno غامض."""
+    from app.core.detector import PPEDetector
+
+    _mock_ultralytics(monkeypatch)
+    model_dir = tmp_path / "Model"
+    model_dir.mkdir()
+    (model_dir / "empty.pt").write_bytes(b"")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        PPEDetector("Model/empty.pt", 0.25, 0.35, "", setting_name="MEDICAL_MODEL_PATH")
+
+    message = str(exc_info.value)
+    assert "Model/empty.pt" in message
+    assert "MEDICAL_MODEL_PATH" in message
+    assert "empty" in message.lower()
+
+
+def test_truncated_weight_file_wraps_ultralytics_error(tmp_path, monkeypatch):
+    """خطأ ultralytics الغامض (OSError/TypeError) بيتحوّل لرسالة تشغيلية فيها السبب."""
+    from app.core.detector import PPEDetector
+
+    _mock_ultralytics(monkeypatch, side_effect=OSError(22, "Invalid argument"))
+    model_dir = tmp_path / "Model"
+    model_dir.mkdir()
+    (model_dir / "truncated.pt").write_bytes(b"PK\x03\x04not-a-real-archive")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        PPEDetector("Model/truncated.pt", 0.25, 0.35, "", setting_name="MEDICAL_MODEL_PATH")
+
+    message = str(exc_info.value)
+    assert "Model/truncated.pt" in message
+    assert "MEDICAL_MODEL_PATH" in message
+    assert "OSError" in message
+    assert "Invalid argument" in message
+    assert exc_info.value.__cause__ is not None
+
+
+def test_valid_weights_still_load_through_the_wrapper(tmp_path, monkeypatch):
+    from app.core.detector import PPEDetector
+
+    fake_ultralytics = _mock_ultralytics(monkeypatch)
+    model_dir = tmp_path / "Model"
+    model_dir.mkdir()
+    (model_dir / "ok.pt").write_bytes(b"PK\x03\x04real-ish-bytes")
+    monkeypatch.chdir(tmp_path)
+
+    detector = PPEDetector("Model/ok.pt", 0.25, 0.35, "")
+
+    fake_ultralytics.YOLO.assert_called_once_with("Model/ok.pt")
+    assert detector.class_names == {0: "mask", 1: "no mask"}
