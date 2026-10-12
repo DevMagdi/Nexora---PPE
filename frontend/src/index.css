@@ -16,15 +16,15 @@
   color-scheme: light;
   --radius: 0.75rem;
 
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f5f8f6;
+  --foreground: #11231d;
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #11231d;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --popover-foreground: #11231d;
 
-  --border: #e2e8f0;
-  --input: #e2e8f0;
+  --border: #dfe8e3;
+  --input: #dfe8e3;
   --ring: #047857;
 
   --muted: #f1f5f9;
@@ -75,8 +75,12 @@
   --chart-axis: #94a3b8;
 
   --glass: rgba(255, 255, 255, 0.82);
-  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px -6px rgba(15, 23, 42, 0.08);
-  --shadow-card-hover: 0 1px 2px rgba(15, 23, 42, 0.05), 0 12px 28px -12px rgba(15, 23, 42, 0.16);
+  --elevation-flat: none;
+  --elevation-card: 0 1px 2px rgba(15, 35, 27, 0.035), 0 6px 20px -10px rgba(15, 35, 27, 0.14);
+  --elevation-card-hover: 0 2px 4px rgba(15, 35, 27, 0.05), 0 16px 32px -16px rgba(15, 35, 27, 0.2);
+  --elevation-floating: 0 18px 48px -20px rgba(15, 35, 27, 0.32), 0 4px 12px rgba(15, 35, 27, 0.08);
+  --shadow-card: var(--elevation-card);
+  --shadow-card-hover: var(--elevation-card-hover);
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -143,9 +147,13 @@
   --chart-grid: rgba(255, 255, 255, 0.06);
   --chart-axis: rgba(148, 163, 184, 0.55);
 
-  --glass: rgba(10, 17, 22, 0.72);
-  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 4px 24px -4px rgba(0, 0, 0, 0.4);
-  --shadow-card-hover: 0 0 0 1px rgba(74, 222, 128, 0.2), 0 12px 36px -8px rgba(0, 0, 0, 0.5);
+  --glass: rgba(10, 17, 22, 0.78);
+  --elevation-flat: none;
+  --elevation-card: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 6px 24px -6px rgba(0, 0, 0, 0.42);
+  --elevation-card-hover: 0 0 0 1px rgba(74, 222, 128, 0.18), 0 14px 34px -10px rgba(0, 0, 0, 0.55);
+  --elevation-floating: 0 22px 54px -18px rgba(0, 0, 0, 0.72), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-card: var(--elevation-card);
+  --shadow-card-hover: var(--elevation-card-hover);
 }
 
 @theme inline {
@@ -204,6 +212,11 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
+
+  --shadow-flat: var(--elevation-flat);
+  --shadow-card: var(--elevation-card);
+  --shadow-card-hover: var(--elevation-card-hover);
+  --shadow-floating: var(--elevation-floating);
 }
 
 /* ─── Animations ─── */
@@ -269,6 +282,23 @@
     @apply bg-background text-foreground font-sans antialiased;
     min-height: 100dvh;
     letter-spacing: -0.01em;
+    font-feature-settings: "ss01" on, "cv11" on;
+    background-image: radial-gradient(ellipse at 12% -8%, color-mix(in srgb, var(--primary) 5%, transparent), transparent 36rem);
+    background-attachment: fixed;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  button:not(:disabled),
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled {
+    cursor: not-allowed;
   }
 
   [dir="rtl"],
@@ -330,20 +360,39 @@
     position: relative;
     border-radius: var(--radius-xl);
     background: var(--card);
-    box-shadow: var(--shadow-card);
-    transition: box-shadow 0.25s var(--ease-out-expo), border-color 0.25s ease;
+    box-shadow: var(--elevation-card);
+    transition: box-shadow 0.22s var(--ease-out-expo), border-color 0.22s ease, transform 0.22s var(--ease-out-expo);
   }
-  @media (hover: hover) {
+  @media (hover: hover) and (prefers-reduced-motion: no-preference) {
     .card-premium:hover {
-      box-shadow: var(--shadow-card-hover);
+      box-shadow: var(--elevation-card-hover);
     }
   }
 
   .card-featured {
     border-radius: var(--radius-xl);
-    background: var(--card);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), var(--shadow-card);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 3%, var(--card)), var(--card) 58%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 22%, var(--border)), var(--elevation-card);
   }
+
+  .tap-target {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .auth-canvas {
+    background-color: var(--background);
+    background-image: radial-gradient(ellipse at 82% 0%, color-mix(in srgb, var(--primary) 8%, transparent), transparent 34rem), radial-gradient(ellipse at 8% 100%, color-mix(in srgb, var(--info) 5%, transparent), transparent 28rem);
+  }
+
+  .auth-orb {
+    position: absolute;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 9999px;
+    pointer-events: none;
+  }
+  .auth-orb-one { width: 28rem; height: 28rem; inset-inline-end: -11rem; top: -11rem; }
+  .auth-orb-two { width: 18rem; height: 18rem; inset-inline-end: -6rem; top: -6rem; border-color: rgba(255, 255, 255, 0.07); }
 
   .btn-cta {
     display: inline-flex;
