@@ -128,6 +128,22 @@ def canonical_class_name(name: str) -> str:
 def is_negative_class(name: str) -> bool:
     return canonical_class_name(name).startswith("NO-")
 
+
+# فئات إنشائية خالصة ملهاش معنى في البروفايل الطبي.
+# دي الحاجة اللي بتضمن إن كاميرا طبي عمرها ما تقول "ناقص خوذة/فيست/بوت" —
+# كل الطبقات (الجسر الإنشائي، الفايروول في الهجين، الـ checkers، فلاتر العرض
+# والعدادات) بتستخدم نفس المجموعة دي كمرجع موحّد.
+CONSTRUCTION_ONLY_CLASSES: frozenset[str] = frozenset(
+    {
+        "Hardhat",
+        "NO-Hardhat",
+        "Safety Vest",
+        "NO-Safety Vest",
+        "Safety Boots",
+        "NO-Safety Boots",
+    }
+)
+
 PPE_CLASS_MAPS: dict[Profile, dict[str, dict[str, str | None]]] = {
     "construction": {
         "helmet": {"label": "Hardhat", "positive": "Hardhat", "negative": "NO-Hardhat"},

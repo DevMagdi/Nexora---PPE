@@ -14,9 +14,10 @@ Nexora connects to existing cameras (**RTSP / IP cameras, Webcams, or Video File
   - **Construction Model (`Model/ppe.pt`):** Detects `Person`, `Hardhat` / `NO-Hardhat`, `Safety Vest` / `NO-Safety Vest`, `Mask` / `NO-Mask`, `Gloves` / `NO-Gloves`, `Safety Boots` / `NO-Safety Boots`, and `Goggles` / `NO-Goggles` with person-bounding-box IoU association.
   - **Medical Model (`Model/bestMedicalModel.pt`):** Detects `mask` / `no mask`, `hand gloves` / `no hand gloves`, `head cap` / `no head cap`, `goggle` / `no goggle`, `lab coat`, `full cover`, and `shoe cover` with grace-period debouncing.
   - **`HybridPPEDetector` (`app/core/hybrid_detector.py`):** Runs **both** YOLO models on the same frame, normalises every class name to one canonical vocabulary (`no goggle` ≡ `NO-Goggles`), merges duplicate boxes with **cross-model confidence fusion**, resolves positive/negative conflicts, and feeds a single detection list to the existing checkers. Medical cameras finally get a `Person` class (the medical model has none), so PPE items can be associated with staff and "staff present but lab coat missing" works out of the box.
-  - **Construction → Medical Bridge (`_bridge_construction_to_medical`):** When a medical camera borrows the construction model, only what the medical profile can use crosses over — `Person` plus the shared items (Mask / Goggles / Gloves). Construction-only classes (Hardhat, Safety Vest, Safety Boots) are dropped before they can pollute medical counters, and the crossing count is published as `bridged` in the hybrid stats.
+  - **Construction → Medical Bridge (`_bridge_construction_to_medical`):** When a medical camera borrows the construction model, only what the medical profile can use crosses over — `Person` plus the shared items (Mask / Goggles / Gloves). Construction-only classes (Hardhat, Safety Vest, Safety Boots) are dropped before they can pollute medical counters, and the crossing count is published as `bridged` in the hybrid stats. A final **medical firewall** in `detect()` drops construction-only classes from *any* source, and `MedicalViolationChecker` ignores them defensively — a medical camera can never report a missing hardhat/vest/boots.
   - **Anatomical Eye Bridge (`_append_anatomical_eye_bridge`):** On medical cameras running *without* any `Person` box (e.g. `HYBRID_CONSTRUCTION_ON_MEDICAL=false`), every `Mask` detection is used as an anatomical anchor — the eye line sits directly above the mask, so the nose-bridge test still runs and can emit `NO-Goggles` (`skin:anatomical_bridge`).
   - **Glove reject ratio (`SKIN_GLOVE_REJECT_RATIO`, default `0.24`):** A `Gloves` box whose region contains **≥ 24 %** thick exposed skin (distanceTransform) is a fake glove and is downgraded to `NO-Gloves` — stricter than the generic `SKIN_STRONG_RATIO` because a real glove never shows skin in its middle.
+  - **Precision guards (`SKIN_*` guard settings):** Skin heuristics are evidence helpers, not models — so their output is confidence-capped (`SKIN_SYNTHETIC_MAX_CONF`, default `0.85`), a skin-sourced negative only counts as *violation evidence* at `≥ SKIN_NEGATIVE_MIN_CONF` (`0.70`), the anatomical scans only anchor on a reliable `Person` (`SKIN_MIN_PERSON_CONF`, `0.35`), and dropping a model positive (Mask/Goggles/Gloves) now needs a strong heuristic (`SKIN_POSITIVE_OVERRIDE_MIN_CONF`, `0.70`) and only works on positives below `SKIN_POSITIVE_OVERRIDE_MAX_CONF` (`0.60`). A model detection confirmed by skin (`model:x+skin:y`) keeps its full evidence weight. On top of that, `DETECTION_CONFIDENCE_FLOOR` (`0.25`) automatically raises any configured inference/class threshold below it (with a log warning), so stale low settings like `0.05`/`0.10` can't flood the system with false detections.
   - **Safe Weight Migration (`RETIRED_MODEL_PATHS`):** Legacy weights (e.g. the removed `Model/bestMedicalModel2.pt`) can never be loaded again: any `.env` still pointing at them is redirected to the approved replacement automatically, retired paths are skipped in fallback lists, and `sanitize_class_conf_thresholds` drops per-class confidence thresholds whose class ids do not exist in the loaded model.
 - **Smart Skin Layer (`app/core/skin_analysis.py`):** Adds deterministic OpenCV evidence on top of the models:
   - **`calc_skin_ratio`** — dual-threshold (HSV + YCrCb) skin pixel ratio per region.
@@ -160,6 +161,12 @@ APP_ENV=prod uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 | `SKIN_EYE_BRIDGE_MIN_SKIN_RATIO` | `0.22` | Minimum skin ratio in the nose-bridge strip for `NO-Goggles` |
 | `SKIN_GLASS_CONFIRM_MIN_RATIO` | `0.05` | Glass-band height ratio that confirms `Goggles` |
 | `SKIN_SYNTHETIC_MIN_CONF` | `0.45` | Floor confidence for skin-generated detections |
+| `SKIN_SYNTHETIC_MAX_CONF` | `0.85` | Ceiling confidence for skin-generated detections (heuristics don't get model-grade confidence) |
+| `SKIN_NEGATIVE_MIN_CONF` | `0.70` | Minimum confidence for a skin-sourced negative to count as violation evidence (below it: displayed only) |
+| `SKIN_MIN_PERSON_CONF` | `0.35` | Mouth/eye-bridge/bare-hand scans only anchor on a `Person` at least this confident |
+| `SKIN_POSITIVE_OVERRIDE_MAX_CONF` / `SKIN_POSITIVE_OVERRIDE_MIN_CONF` | `0.60` / `0.70` | A model positive may only be dropped below the max, and only by a heuristic at least as confident as the min |
+| `DETECTION_CONFIDENCE_FLOOR` | `0.25` | Any configured inference/class confidence below this is raised automatically (log warning) |
+| `DB_SQL_ECHO` | `false` | Echo every SQL statement to the log (previously always on in `dev`, printing each query twice) |
 | `ALERT_COOLDOWN_SECONDS` | `60` | Minimum seconds between repeated alerts for the same PPE type per camera |
 | `VIOLATION_PERSIST_SECONDS` | `8` | Seconds a construction PPE violation must persist before triggering an alert |
 | `MEDICAL_VIOLATION_PERSIST_SECONDS` | `3` | Seconds a medical PPE violation must persist before triggering an alert |
@@ -199,14 +206,20 @@ frame ─┬─► construction YOLO (ppe.pt)          ─┐
 | "Gloves" predicted on a bare hand | `distanceTransform` thickness test + **24 % glove reject ratio** downgrade fake `Gloves` to `NO-Gloves` |
 | False `NO-Goggles` on someone wearing goggles | The glass-band check on the eye line confirms `Goggles` instead |
 | No `NO-Goggles` when the medical camera runs without `Person` | The **anatomical eye bridge** anchors the nose-bridge test on each detected `Mask` |
-| Construction-only boxes (helmet/vest/boots) on medical streams | The **construction→medical bridge** only passes `Person` + shared items across |
+| Construction-only boxes (helmet/vest/boots) on medical streams | The **construction→medical bridge** only passes `Person` + shared items across, a final firewall in `detect()` drops them from any source, and the medical checker ignores them defensively |
 | Old weights re-loaded by a stale `.env` | **Safe weight migration**: retired paths redirect to the approved replacement and stale class-id thresholds are dropped |
 | Stream shows boxes the camera does not check | **Rule-synced display** draws only enabled classes (+ `Person`) on the annotated video |
+| Repeated `no mask` / `no hand gloves` violations from weak skin boxes | **Precision guards**: skin negatives below `SKIN_NEGATIVE_MIN_CONF` are display-only, synthetic confidence is capped at `SKIN_SYNTHETIC_MAX_CONF`, and scans anchor only on reliable `Person` boxes |
+| Old thresholds like `0.05`/`0.10` produce junk detections | **`DETECTION_CONFIDENCE_FLOOR`** raises them automatically at load time (with a warning) |
+| SQL statements flood the log (twice per query) in `dev` | **`DB_SQL_ECHO`** is now off by default — enable it only while debugging queries |
+| `SAWarning: Unrecognized server version info '17.0.…'` on SQL Server 2025 | Fixed by requiring **SQLAlchemy ≥ 2.0.50** |
 
 **Tuning tips**
 
 * Too many `NO-Goggles` alerts → raise `SKIN_EYE_BRIDGE_MIN_SKIN_RATIO` (e.g. `0.30`) or set `SKIN_EYE_BRIDGE_ENABLED=false`.
 * Bare-hand scan too eager → raise `SKIN_BARE_HAND_MIN_THICKNESS` / `SKIN_STRONG_RATIO`.
+* Too many recorded violations from skin evidence → raise `SKIN_NEGATIVE_MIN_CONF` (e.g. `0.80`).
+* Still too many false detections at all → raise `DETECTION_CONFIDENCE_FLOOR` (e.g. `0.30`).
 * CPU-only hosts → keep `HYBRID_MEDICAL_ON_CONSTRUCTION=false` (default) so construction cameras still run one model.
 * Need the old behaviour? `HYBRID_DETECTION_ENABLED=false` restores one-model-per-profile exactly as before.
 
@@ -217,12 +230,35 @@ frame ─┬─► construction YOLO (ppe.pt)          ─┐
 pytest tests/unit/test_skin_analysis.py tests/unit/test_hybrid_detector.py \
        tests/unit/test_hybrid_bridge.py tests/unit/test_hybrid_anatomical.py \
        tests/unit/test_glove_reject.py tests/unit/test_weight_migration.py \
-       tests/unit/test_display_filter.py -v
+       tests/unit/test_display_filter.py tests/unit/test_precision_guards.py -v
 ```
 
 ---
 
 ## ملخص التحديث بالعربية (Detection Update)
+
+### تحديث الدقة والحراس (2026-10-12 — Precision & Medical Firewall)
+
+- **كاميرا طبي عمرها ما تقول "ناقص خوذة":** الفئات الإنشائية الخالصة (خوذة/فيست/حذاء أمان) مسدودة
+  الآن على ثلاث طبقات — الجسر الإنشائي بيمنعها من الموديل، وفايروول نهائي في `detect()` بيمنعها من
+  أي مصدر تاني، والـ checker الطبي بيتجاهلها دفاعيًا. مفيش مسار ممكن يطلّع مخالفة خوذة على كاميرا طبية.
+- **حارس الدقة (`DETECTION_CONFIDENCE_FLOOR=0.25`):** أي عتبة إنتاج كشف أقل من الأرضية (زي
+  `0.05`/`0.10` اللي كانت في الإعدادات) بتترفع تلقائيًا مع تحذير في اللوج — كانت بتنتج `Person`
+  بيتقلب بين 0.26 و 0.93 وكشوف وهمية على كل فريم.
+- **سقف ثقة الهوريستيك (`SKIN_SYNTHETIC_MAX_CONF=0.85`):** فلتر الجلد مش موديل مُدرَّب — مينفعش
+  يطلع `NO-Mask` بثقة 0.96 زي اللوج.
+- **دليل الجلد الضعيف مش بيسجّل مخالفات (`SKIN_NEGATIVE_MIN_CONF=0.70`):** الكشوف السالبة مصدرها
+  الجلد تحت الثقة دي بتتعرض على البث بس؛ كشف موديل (`model:*`) أو موديل مؤكَّد بالجلد (`model:x+skin:y`)
+  بيفضل دليل كامل بأي ثقة.
+- **الفحوصات التشريحية على أشخاص موثوقين بس (`SKIN_MIN_PERSON_CONF=0.35`):** فحص الفم/جسر العينين/
+  اليدين مبتشتغلش على `Person` ضعيف — ده اللي كان بيولّد `NO-Mask`/`NO-Gloves` وهمي كل فريم.
+- **إسقاط الموجبات بقى صارم:** الكمامة/النظارة/القفاز المكتشفة بالموديل فوق `0.60` مش بتتاب إلا
+  بهوريستيك واثق `≥ 0.70` (كان 0.55 بيبطل كشف `Mask` لغاية 0.75).
+- **تنضيف اللوج:** طباعة استعلامات SQL بقت مقفولة افتراضيًا (`DB_SQL_ECHO=false`) — كانت بتتطبع
+  مرتين لكل استعلام — وترقية SQLAlchemy لـ `≥ 2.0.50` شالت تحذير SQL Server 2025
+  (`Unrecognized server version info '17.0.1000.7'`).
+
+### تحديث الكشف الهجين (Hybrid Detection)
 
 - **ترحيل آمن للأوزان:** الوزن القديم `Model/bestMedicalModel2.pt` اتشال نهائيًا، وأي إعداد قديم
   في `.env` يشير إليه بيتحوّل تلقائيًا إلى `Model/bestMedicalModel.pt`. كمان عتبات الثقة لكل فئة
