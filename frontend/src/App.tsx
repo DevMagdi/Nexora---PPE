@@ -258,7 +258,7 @@ export default function App({ user }: { user: MeResponse }) {
           <div className="page-enter" key={tab}>
             {content}
           </div>
-          <footer className="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5 text-[9px] text-muted-foreground">
+          <footer className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-6 text-[9px] text-muted-foreground">
             <span>مصانع · مواقع إنشاء · ورش صناعية · مستودعات</span>
             <span className="latin tracking-wider" dir="ltr">
               MANTIK PPE · LOCAL INDUSTRIAL INTELLIGENCE

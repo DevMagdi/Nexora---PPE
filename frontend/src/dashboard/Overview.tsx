@@ -128,7 +128,7 @@ export default function Overview({
         </div>
       </section>
       <section
-        className="grid grid-cols-2 gap-3 xl:grid-cols-4 sm:gap-5"
+        className="grid grid-cols-2 gap-4 xl:grid-cols-4 sm:gap-6"
         aria-label="مؤشرات التشغيل"
       >
         {cards.map((item) => (
@@ -153,7 +153,7 @@ export default function Overview({
           </article>
         ))}
       </section>
-      <div className="grid gap-6 xl:grid-cols-[1.7fr_1fr]">
+      <div className="grid gap-7 xl:grid-cols-[1.7fr_1fr]">
         <section className="panel min-w-0">
           <div className="panel-header">
             <div>

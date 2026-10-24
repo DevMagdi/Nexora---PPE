@@ -60,7 +60,7 @@ export default function LivePage({
     live.counts?.no_goggles,
   ]
   return (
-    <div className="grid items-start gap-6 xl:grid-cols-[1fr_270px]">
+    <div className="grid items-start gap-7 xl:grid-cols-[1fr_280px]">
       <section className="panel min-w-0 overflow-hidden">
         <div className="panel-header">
           <div>
