@@ -5,10 +5,12 @@ export default function RulePicker({
   value,
   onChange,
   disabled = false,
+  supportedNegativeRules,
 }: {
   value: RuleKey[]
   onChange: (value: RuleKey[]) => void
   disabled?: boolean
+  supportedNegativeRules?: RuleKey[] | null
 }) {
   return (
     <fieldset disabled={disabled}>
@@ -29,10 +31,20 @@ export default function RulePicker({
                 )
               }
             />
-            {RULE_LABEL[key]}
+            <span>{RULE_LABEL[key]}</span>
+            {supportedNegativeRules && !supportedNegativeRules.includes(key) && (
+              <span className="text-[10px] text-muted-foreground">عرض فقط</span>
+            )}
           </label>
         ))}
       </div>
+      {supportedNegativeRules &&
+        Object.keys(RULE_LABEL).some((key) => !supportedNegativeRules.includes(key as RuleKey)) && (
+          <p className="source-help mt-3">
+            «عرض فقط»: الفئة السالبة غير موجودة في الوزن؛ تنبيه القاعدة معطّل، ويظل كشف المعدات
+            الموجب متاحًا إن دعمه الوزن.
+          </p>
+        )}
     </fieldset>
   )
 }

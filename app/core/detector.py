@@ -11,13 +11,23 @@ import numpy as np
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.model_policy import MODEL_FILENAME, validate_model_path
-from app.core.ppe import canonical_class_name, is_negative_class
+from app.core.postprocess import resolve_ppe_conflicts
+from app.core.ppe import (
+    DANGER_BGR as DANGER_BGR,
+)
+from app.core.ppe import (
+    GOLD_BGR as GOLD_BGR,
+)
+from app.core.ppe import (
+    TEXT_BGR as TEXT_BGR,
+)
+from app.core.ppe import (
+    canonical_class_name,
+    is_negative_class,
+    supported_negative_rules,
+)
 
 logger = get_logger(__name__)
-# OpenCV uses BGR. Gold equipment, neutral people, red violations.
-GOLD_BGR = (39, 162, 201)
-TEXT_BGR = (232, 232, 232)
-DANGER_BGR = (85, 85, 229)
 
 
 @dataclass
@@ -31,6 +41,7 @@ class Detection:
     y2: int
     color: tuple[int, int, int] = GOLD_BGR
     source: str = "model"
+    person_index: int | None = None
 
 
 def require_model_file(model_path: str | None = None) -> Path:
@@ -122,6 +133,10 @@ class PPEDetector:
             "Industrial detector ready: %s conf=%.2f", self.weights_fingerprint, self.confidence
         )
 
+    @property
+    def supported_negative_rules(self) -> frozenset[str]:
+        return supported_negative_rules(self.class_names)
+
     def detect(self, frame: np.ndarray) -> list[Detection]:
         if (
             not isinstance(frame, np.ndarray)
@@ -159,4 +174,4 @@ class PPEDetector:
                         else GOLD_BGR
                     )
                     detections.append(Detection(class_id, name, conf, x1, y1, x2, y2, color))
-        return detections
+        return resolve_ppe_conflicts(detections, display_confidence=self.confidence)

@@ -20,6 +20,7 @@ from app.camera.source_security import validate_file_uri
 from app.core.auth import require_roles
 from app.core.config import settings
 from app.core.frame_annotator import annotate_frame
+from app.core.postprocess import resolve_ppe_conflicts
 from app.core.ppe import display_classes, sanitize_enabled_classes
 from app.db.audit import add_audit_event
 from app.db.models import Camera, User
@@ -83,6 +84,7 @@ async def infer_image(
     frame = await asyncio.to_thread(_decode_image, data)
     async with request.app.state.inference_slots:
         detections = await asyncio.to_thread(request.app.state.detector.detect, frame)
+    detections = resolve_ppe_conflicts(detections)
     allowed = display_classes(rules)
     detections = [d for d in detections if d.class_name in allowed]
     annotated = await asyncio.to_thread(annotate_frame, frame, detections, [])
@@ -98,6 +100,7 @@ async def infer_image(
                 "class_name": d.class_name,
                 "confidence": d.confidence,
                 "box": [d.x1, d.y1, d.x2, d.y2],
+                "person_index": d.person_index,
             }
             for d in detections
         ],

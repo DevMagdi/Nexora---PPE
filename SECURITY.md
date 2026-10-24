@@ -1,4 +1,4 @@
-# Nexora PPE security policy
+# Mantik PPE security policy
 
 This is an on-prem industrial monitoring application, not a substitute for site safety procedures. Deploy behind the site's HTTPS proxy and network controls. See [deployment guidance](docs/ON_PREM_SECURITY_AR.md).
 

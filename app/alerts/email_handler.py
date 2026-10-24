@@ -47,7 +47,9 @@ class EmailHandler(AlertHandler):
         message = MIMEMultipart()
         message["From"] = settings.SENDER_EMAIL
         message["To"] = settings.RECEIVER_EMAIL
-        message["Subject"] = f"Alert: {violation.violation_type} on Camera {violation.camera_id}"
+        message["Subject"] = (
+            f"Mantik PPE Alert: {violation.violation_type} on Camera {violation.camera_id}"
+        )
 
         body = (
             f"A safety violation was detected on Camera {violation.camera_id}.\n"

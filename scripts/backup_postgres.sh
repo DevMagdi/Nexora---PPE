@@ -6,7 +6,7 @@ cd "$ROOT"
 mkdir -p backups
 chmod 700 backups
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-archive="nexora-postgres-${stamp}.nxb"
+archive="mantik-postgres-${stamp}.nxb"
 container_path="/var/nexora/backups/${archive}"
 
 # The custom-format dump is streamed directly into the app container's

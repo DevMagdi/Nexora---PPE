@@ -1,4 +1,4 @@
-# Nexora Industrial Console
+# Mantik Industrial Console
 
 Arabic RTL console for factory, construction-site, industrial-workshop and warehouse PPE monitoring. React + TypeScript + Vite + TanStack Query. All screens consume the real API; there is no production demo-data mode.
 

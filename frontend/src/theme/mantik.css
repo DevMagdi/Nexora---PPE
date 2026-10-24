@@ -31,10 +31,10 @@
   --secondary-foreground: var(--text-soft);
   --muted: var(--navy-deep);
   --muted-foreground: var(--text-muted);
-  --accent: rgba(201, 162, 39, 0.045);
+  --accent: rgba(201, 162, 39, 0.035);
   --accent-foreground: var(--gold-soft);
   --border: var(--gold-border);
-  --separator: rgba(168, 176, 188, 0.09);
+  --separator: rgba(168, 176, 188, 0.075);
   --input: var(--gold-border);
   --ring: var(--gold);
   --success: #7eb394;
@@ -44,13 +44,13 @@
   --destructive-foreground: var(--navy-deep);
   --destructive-light: rgba(239, 119, 119, 0.08);
   --destructive-border: rgba(239, 119, 119, 0.14);
-  --chart-gold: var(--gold);
-  --chart-soft: var(--gold-soft);
-  --chart-muted: var(--gold-muted);
-  --chart-neutral: var(--text-muted);
+  --chart-gold: var(--text-soft);
+  --chart-soft: var(--text-muted);
+  --chart-muted: color-mix(in srgb, var(--text-muted) 65%, var(--navy-panel));
+  --chart-neutral: color-mix(in srgb, var(--text-muted) 40%, var(--navy-panel));
   --chart-grid: var(--separator);
   --chart-axis: var(--text-muted);
-  --shadow-card: 0 16px 52px rgba(17, 27, 43, 0.14);
-  --shadow-floating: 0 28px 96px rgba(17, 27, 43, 0.32);
+  --shadow-card: 0 16px 52px rgba(17, 27, 43, 0.12);
+  --shadow-floating: 0 28px 96px rgba(17, 27, 43, 0.28);
   --radius: 1.1rem;
 }

@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from app.core.detector import Detection
+from app.core.postprocess import resolve_ppe_conflicts
 
 
 def draw_text_with_background(
@@ -42,17 +43,22 @@ def annotate_frame(
 ) -> np.ndarray:
     annotated = frame.copy()
 
-    for det in detections:
+    for det in resolve_ppe_conflicts(detections):
         cv2.rectangle(annotated, (det.x1, det.y1), (det.x2, det.y2), det.color, 2)
         label = f"{det.class_name} ({det.confidence:.2f})"
 
         draw_text_with_background(
             annotated,
             label,
-            (det.x1, det.y1 - 10),
+            (
+                max(2, det.x1),
+                min(frame.shape[0] - 8, det.y2 - 8)
+                if det.class_name == "Person"
+                else max(16, det.y1 - 10),
+            ),
             font_scale=0.4,
-            color=(255, 255, 255),
-            bg_color=det.color,
+            color=det.color,
+            bg_color=(43, 27, 17),
             alpha=0.8,
             padding=4,
         )

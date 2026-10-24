@@ -1,4 +1,4 @@
-# Contributing to Nexora Industrial PPE
+# Contributing to Mantik Industrial PPE
 
 Keep changes within factories, construction sites, industrial workshops, warehouses and industrial areas. The single approved checkpoint is `ppe_unified_best.pt`; do not add alternative loaders, downloads or production demo detections. Preserve the fixed MANTIK Navy + Gold tokens in `frontend/src/theme/mantik.css`.
 

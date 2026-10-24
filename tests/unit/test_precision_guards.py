@@ -24,7 +24,7 @@ def _detector(boxes):
 
 
 def test_boxes_are_clipped_and_colored_from_identity():
-    detector = _detector([_box(1, 0.9, [-10, -5, 1000, 1000]), _box(2, 0.9, [1, 2, 30, 40])])
+    detector = _detector([_box(1, 0.9, [-10, -5, 1000, 1000]), _box(4, 0.9, [1, 2, 30, 40])])
     result = detector.detect(np.zeros((64, 80, 3), dtype=np.uint8))
     assert (result[0].x1, result[0].y1, result[0].x2, result[0].y2) == (0, 0, 80, 64)
     assert result[0].color == GOLD_BGR

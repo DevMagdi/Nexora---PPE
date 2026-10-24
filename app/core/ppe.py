@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import re
 
+# OpenCV BGR: equipment gold, people neutral, explicit violations red.
+GOLD_BGR = (39, 162, 201)
+TEXT_BGR = (232, 232, 232)
+DANGER_BGR = (85, 85, 229)
+
 # The complete, closed industrial vocabulary used by inference, APIs and workers.
 CANONICAL_CLASS_NAMES: tuple[str, ...] = (
     "Person",
@@ -142,3 +147,9 @@ def ppe_meta() -> dict:
         "allowed": list(PPE_CLASSES),
         "classes": list(CANONICAL_CLASS_NAMES),
     }
+
+
+def supported_negative_rules(class_names: dict[int, str] | list[str]) -> frozenset[str]:
+    names = class_names.values() if isinstance(class_names, dict) else class_names
+    canonical = {canonical_class_name(name) for name in names}
+    return frozenset(key for key, pair in PPE_CLASSES.items() if pair["negative"] in canonical)

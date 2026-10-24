@@ -18,7 +18,7 @@ the whole import chain before FastAPI or Alembic ever start::
     An Application Control policy has blocked this file.
 
 SQLAlchemy works fine without those accelerators (that is exactly what a source
-install without Cython produces), so when they cannot be loaded Nexora installs
+install without Cython produces), so when they cannot be loaded Mantik installs
 an import hook that serves the pure-Python twin of every blocked module instead.
 Nothing else changes: the ORM, Alembic migrations and the async engine all keep
 working, only row processing gets slightly slower.
@@ -61,7 +61,7 @@ PACKAGE_NAME = "sqlalchemy"
 
 # ``DISABLE_SQLALCHEMY_CEXT`` is the flag SQLAlchemy's own setup.py uses at build
 # time; ``DISABLE_SQLALCHEMY_CEXT_RUNTIME`` is the one SQLAlchemy 2.0.x reads at
-# runtime. Nexora accepts both so the documented names keep working.
+# runtime. Mantik accepts both so the documented names keep working.
 FORCE_PURE_PYTHON_ENV_VARS = ("DISABLE_SQLALCHEMY_CEXT", "DISABLE_SQLALCHEMY_CEXT_RUNTIME")
 
 # Error text that specifically identifies an Application Control policy
@@ -135,7 +135,7 @@ def dotenv_values() -> dict[str, str]:
     ``pydantic-settings`` reads ``.env`` itself, but it does that long after
     SQLAlchemy has been imported, so the override would arrive too late. Reading
     the two keys here keeps ``DISABLE_SQLALCHEMY_CEXT=1`` working from ``.env``
-    exactly like every other Nexora setting. Real environment variables win.
+    exactly like every other Mantik setting. Real environment variables win.
     """
     global _dotenv_cache
     if _dotenv_cache is None:

@@ -19,7 +19,7 @@ _USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,100}$")
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m app.cli",
-        description="On-prem industrial Nexora account provisioning.",
+        description="On-prem industrial Mantik account provisioning.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

@@ -48,7 +48,7 @@ async def upgrade_database() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_root_logger(settings.LOG_LEVEL)
-    logger.info("Starting Nexora PPE API (env=%s)", settings.APP_ENV)
+    logger.info("Starting Mantik PPE API (env=%s)", settings.APP_ENV)
     logger.info("Database backend: %s", database_backend_label(settings.DATABASE_URL))
     # Fail fast with a clear message instead of PyJWT's InsecureKeyLengthWarning
     # surfacing later at the first login/media request.
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Nexora Industrial PPE API",
+        title="Mantik Industrial PPE API",
         description="Industrial safety monitoring for factories, construction sites, workshops and warehouses",
         version="4.0.0",
         lifespan=lifespan,

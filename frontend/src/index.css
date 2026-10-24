@@ -125,7 +125,7 @@
     box-shadow: var(--shadow-card);
   }
   .panel-header {
-    padding: 24px 28px;
+    padding: 26px 30px;
     border-bottom: 1px solid var(--separator);
     display: flex;
     align-items: center;
@@ -319,7 +319,7 @@
     color: var(--text-muted);
   }
   .metric-card {
-    padding: 28px;
+    padding: 30px;
     position: relative;
     overflow: hidden;
     min-height: 150px;
