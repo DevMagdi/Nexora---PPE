@@ -2,6 +2,9 @@ export type UserRole = "admin" | "supervisor" | "viewer"
 export type RangeKey = "24h" | "7d"
 export type TabKey = "overview" | "live" | "cameras" | "uploads" | "violations" | "sites" | "users"
 export type SiteKind = "factory" | "construction" | "workshop" | "warehouse" | "industrial"
+export type CameraSourceType = "rtsp" | "rtsps" | "http_mjpeg" | "hls" | "file" | "usb"
+export type ConnectionStatus =
+  "starting" | "running" | "retrying" | "stopped" | "completed" | "error"
 export type RuleKey = "helmet" | "vest" | "gloves" | "boots" | "goggles"
 
 export interface MeResponse {
@@ -29,24 +32,39 @@ export interface SitePayload {
 export interface Camera {
   id: number
   name: string
-  source_type: "rtsp" | "file"
+  source_type: CameraSourceType
   source_uri: string
   site_id: number | null
   enabled_classes: RuleKey[]
   is_active: boolean
   created_at: string
   is_running: boolean
+  connection_status: ConnectionStatus
+  last_error: string | null
+  device_index: number | null
+  port: number | null
+  auth_mode: "basic" | "digest"
+  onvif_device_uri: string | null
 }
-export interface CameraCreatePayload {
+export interface CameraSourceFields {
+  source_uri?: string
+  device_index?: number
+  port?: number
+  source_username?: string
+  source_password?: string
+  clear_credentials?: boolean
+  auth_mode?: "basic" | "digest"
+  onvif_device_uri?: string | null
+}
+export interface CameraCreatePayload extends CameraSourceFields {
   name: string
-  source_type: "rtsp" | "file"
-  source_uri: string
+  source_type: CameraSourceType
   site_id: number | null
   enabled_classes: RuleKey[]
 }
-export interface CameraUpdatePayload {
+export interface CameraUpdatePayload extends CameraSourceFields {
   name: string
-  source_uri?: string
+  source_type?: CameraSourceType
   site_id: number | null
   enabled_classes: RuleKey[]
 }
@@ -97,6 +115,14 @@ export interface SystemMeta {
   confidence: number
   max_upload_mb: number
   max_video_seconds: number
+  supported_source_types: CameraSourceType[]
+  recommended_source_type: "rtsp"
+  rtsp_sources_enabled: boolean
+  http_sources_enabled: boolean
+  file_sources_enabled: boolean
+  usb_sources_enabled: boolean
+  usb_device_indices: number[]
+  onvif_mode: "metadata_only"
   rules: { key: RuleKey; label_ar: string; label_en: string }[]
 }
 export interface DashboardData {

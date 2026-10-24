@@ -29,7 +29,7 @@ export default function PasswordChangeScreen({ username }: { username: string })
     >
       <Brand />
       <section className="panel w-full max-w-md p-7">
-        <KeyRound className="mb-4 size-8 text-primary" strokeWidth={1.4} />
+        <KeyRound className="mb-4 size-8 text-muted-foreground" strokeWidth={1.4} />
         <h1 className="text-2xl">تأمين حسابك</h1>
         <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
           مرحباً {username}. غيّر كلمة المرور المؤقتة قبل دخول المنصة.
@@ -99,7 +99,7 @@ export default function PasswordChangeScreen({ username }: { username: string })
           </p>
           <InlineError error={error || mutation.error} />
           <Button className="w-full" type="submit" disabled={mutation.isPending}>
-            {mutation.isPending && <Loader2 className="animate-spin" />}حفظ ومتابعة
+            {mutation.isPending && <Loader2 />}حفظ ومتابعة
           </Button>
         </form>
       </section>

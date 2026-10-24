@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from app.camera.types import SOURCE_TYPES
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.model_policy import MODEL_FILENAME
@@ -25,4 +26,14 @@ def system_meta(user: User = Depends(get_current_user)):
         "max_upload_mb": settings.MAX_UPLOAD_MB,
         "max_video_seconds": settings.MAX_UPLOAD_VIDEO_SECONDS,
         "rules": ppe_meta()["items"],
+        "supported_source_types": list(SOURCE_TYPES),
+        "recommended_source_type": "rtsp",
+        "rtsp_sources_enabled": bool(settings.rtsp_prefixes),
+        "http_sources_enabled": bool(settings.http_camera_prefixes),
+        "file_sources_enabled": bool(settings.ALLOWED_VIDEO_DIR),
+        "usb_sources_enabled": settings.APP_ENV == "dev" and settings.ENABLE_USB_SOURCES,
+        "usb_device_indices": sorted(settings.usb_device_indices)
+        if settings.APP_ENV == "dev" and settings.ENABLE_USB_SOURCES
+        else [],
+        "onvif_mode": "metadata_only",
     }

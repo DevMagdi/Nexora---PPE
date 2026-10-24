@@ -59,3 +59,19 @@ def test_ci_has_backend_and_real_browser_gates_without_deployment_weights():
     assert "npm run build" in browser and "npm run test:e2e" in browser
     assert "playwright install --with-deps chromium" in browser
     assert "ppe_unified_best.pt" not in backend  # no download/substitution in CI
+
+
+def test_http_only_production_install_has_no_dummy_rtsp_or_usb_capability(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer, "ROOT", tmp_path)
+    monkeypatch.setattr(installer, "ENV_EXAMPLE", ROOT / ".env.example")
+    monkeypatch.setattr(installer, "ENV_FILE", tmp_path / ".env")
+    installer.setup(
+        "nexora.site.lan", [], "0.0.0.0", http_prefixes=["http://192.168.10.30:8888/factory"]
+    )
+    config = Settings(_env_file=tmp_path / ".env")
+    assert not config.rtsp_prefixes
+    assert config.http_camera_prefixes == ["http://192.168.10.30:8888/factory"]
+    assert not config.ENABLE_USB_SOURCES and not config.ALLOW_LOOPBACK_HTTP_SOURCES
+    app = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]["app"]
+    assert app["environment"]["ENABLE_USB_SOURCES"] == "false"
+    assert app["environment"]["ALLOW_LOOPBACK_HTTP_SOURCES"] == "false"

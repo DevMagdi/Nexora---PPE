@@ -5,13 +5,16 @@ import { Button } from "@/components/ui/button"
 import { Empty, InlineError } from "@/components/Feedback"
 import Modal from "@/components/Modal"
 import CameraForm from "@/cameras/CameraForm"
+import { CONNECTION_LABEL, SOURCE_LABEL, sourceIsBusy } from "@/cameras/sources"
+import { getErrorMessage } from "@/lib/utils"
 import { deleteCamera, startCamera, stopCamera } from "@/lib/api"
 import { RULE_LABEL, num } from "@/lib/formatters"
-import type { Camera, Site } from "@/types"
+import type { Camera, Site, SystemMeta } from "@/types"
 
 export default function CamerasPage({
   cameras,
   sites,
+  meta,
   canOperate,
   onLive,
   refresh,
@@ -19,6 +22,7 @@ export default function CamerasPage({
 }: {
   cameras: Camera[]
   sites: Site[]
+  meta?: SystemMeta
   canOperate: boolean
   onLive: (id: number) => void
   refresh: () => Promise<void>
@@ -29,12 +33,15 @@ export default function CamerasPage({
   const [target, setTarget] = useState<Camera | null>(null)
   const toggle = useMutation({
     mutationFn: (camera: Camera) =>
-      camera.is_running ? stopCamera(camera.id) : startCamera(camera.id),
+      sourceIsBusy(camera) ? stopCamera(camera.id) : startCamera(camera.id),
     onSuccess: async () => {
       await refresh()
       notify("تم تحديث حالة الكاميرا")
     },
-    onError: (error) => notify(error instanceof Error ? error.message : "تعذّر تشغيل المصدر", true),
+    onError: async (error) => {
+      notify(getErrorMessage(error, "تعذّر تشغيل المصدر"), true)
+      await refresh()
+    },
   })
   const remove = useMutation({
     mutationFn: (id: number) => deleteCamera(id),
@@ -48,7 +55,7 @@ export default function CamerasPage({
     `${item.name} ${sites.find((site) => site.id === item.site_id)?.name ?? ""}`.includes(query),
   )
   return (
-    <div className="space-y-5">
+    <div className="space-y-7">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full max-w-xs">
           <Search className="absolute start-3 top-3.5 size-4 text-muted-foreground" />
@@ -83,29 +90,30 @@ export default function CamerasPage({
               canOperate && !query ? (
                 <Button variant="outline" onClick={() => setForm("new")}>
                   <Plus />
-                  إضافة كاميرا RTSP
+                  إضافة مصدر كاميرا
                 </Button>
               ) : undefined
             }
           />
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {list.map((camera) => (
             <article key={camera.id} className="panel overflow-hidden">
               <div className="camera-preview">
                 <Cctv />
                 <span
-                  className={`badge absolute start-4 top-4 ${camera.is_running ? "badge-success" : ""}`}
+                  className={`badge absolute start-4 top-4 ${camera.connection_status === "error" ? "badge-danger" : camera.is_running ? "badge-success" : ""}`}
                 >
                   <span className="status-dot" />
-                  {camera.is_running ? "متصلة" : "متوقفة"}
+                  {CONNECTION_LABEL[camera.connection_status] ??
+                    (camera.is_running ? "متصلة" : "متوقفة")}
                 </span>
                 <span className="latin absolute bottom-4 end-4 text-[9px] text-muted-foreground">
                   CAM-{String(camera.id).padStart(3, "0")}
                 </span>
               </div>
-              <div className="p-5">
+              <div className="p-6">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-sm">{camera.name}</h2>
@@ -113,27 +121,35 @@ export default function CamerasPage({
                       {sites.find((site) => site.id === camera.site_id)?.name ?? "موقع غير معيّن"}
                     </p>
                   </div>
-                  <span className="badge latin text-[9px]">
-                    {camera.source_type === "rtsp" ? "RTSP" : "VIDEO"}
-                  </span>
+                  <span className="badge latin text-[9px]">{SOURCE_LABEL[camera.source_type]}</span>
                 </div>
                 <div
-                  className="latin my-4 truncate rounded border border-border bg-muted p-2 text-[10px] text-muted-foreground"
+                  className="latin my-5 truncate rounded-lg bg-muted p-3 text-[10px] text-muted-foreground"
                   dir="ltr"
                 >
                   {camera.source_uri}
                 </div>
+                {camera.last_error && (
+                  <p className="notice notice-error mb-5" role="alert">
+                    {camera.last_error}
+                  </p>
+                )}
+                {camera.source_type === "usb" && (
+                  <p className="source-help mb-5">
+                    USB محلي — تطوير وتجربة فقط، غير مسموح للإنتاج.
+                  </p>
+                )}
                 <div className="mb-5 flex flex-wrap gap-1.5">
                   {camera.enabled_classes.map((key) => (
                     <span
                       key={key}
-                      className="text-[10px] text-muted-foreground after:ms-1.5 after:text-primary after:content-['·'] last:after:content-none"
+                      className="text-[10px] text-muted-foreground after:ms-1.5 after:text-muted-foreground after:content-['·'] last:after:content-none"
                     >
                       {RULE_LABEL[key]}
                     </span>
                   ))}
                 </div>
-                <div className="flex items-center gap-2 border-t border-border pt-4">
+                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-5">
                   <Button
                     variant={camera.is_running ? "default" : "outline"}
                     size="sm"
@@ -147,13 +163,13 @@ export default function CamerasPage({
                       <Button
                         variant="outline"
                         size="icon"
-                        aria-label={`${camera.is_running ? "إيقاف" : "تشغيل"} ${camera.name}`}
+                        aria-label={`${sourceIsBusy(camera) ? "إيقاف" : "تشغيل"} ${camera.name}`}
                         disabled={toggle.isPending}
                         onClick={() => toggle.mutate(camera)}
                       >
                         {toggle.isPending && toggle.variables?.id === camera.id ? (
-                          <Loader2 className="animate-spin" />
-                        ) : camera.is_running ? (
+                          <Loader2 />
+                        ) : sourceIsBusy(camera) ? (
                           <Square />
                         ) : (
                           <Play />
@@ -186,14 +202,15 @@ export default function CamerasPage({
       <Modal
         open={form !== null}
         onClose={() => setForm(null)}
-        title={form === "new" ? "إضافة كاميرا RTSP" : "إعدادات الكاميرا"}
-        description="حدّد موقع المصدر وقواعد معدات الوقاية الصناعية."
+        title={form === "new" ? "إضافة مصدر كاميرا" : "إعدادات الكاميرا"}
+        description="اختر نوع المصدر أولًا. RTSP هو الافتراضي للإنتاج؛ ملف الفيديو وUSB للتجربة."
       >
         {form && (
           <CameraForm
             key={form === "new" ? "new" : form.id}
             camera={form === "new" ? undefined : form}
             sites={sites}
+            meta={meta}
             onSuccess={() => {
               setForm(null)
               void refresh()
@@ -222,7 +239,7 @@ export default function CamerasPage({
               if (target) remove.mutate(target.id)
             }}
           >
-            {remove.isPending && <Loader2 className="animate-spin" />}تأكيد الحذف
+            {remove.isPending && <Loader2 />}تأكيد الحذف
           </Button>
         </div>
       </Modal>

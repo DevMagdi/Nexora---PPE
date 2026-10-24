@@ -65,17 +65,24 @@ def test_pin_mismatch_never_imports_inference_runtime(tmp_path, monkeypatch):
         PPEDetector()
 
 
-@pytest.mark.parametrize(
-    "names",
-    [
-        list(CANONICAL_CLASS_NAMES) + ["Out of scope"],
-        ["Hardhat"],
-        list(CANONICAL_CLASS_NAMES) + ["worker"],
-    ],
-)
-def test_checkpoint_class_contract_is_closed(names):
-    with pytest.raises(RuntimeError):
-        validate_class_names(names)
+@pytest.mark.parametrize("extra", ["Out of scope", "worker"])
+def test_checkpoint_class_mapping_stays_industrial_when_extra_names_are_ignored(extra):
+    mapping = validate_class_names(list(CANONICAL_CLASS_NAMES) + [extra])
+    assert set(mapping.values()) == set(CANONICAL_CLASS_NAMES)
+    assert len(mapping) == len(CANONICAL_CLASS_NAMES)
+    assert len(CANONICAL_CLASS_NAMES) not in mapping
+
+
+@pytest.mark.parametrize("missing", ["Person", "Hardhat", "NO-Hardhat", "Safety Vest"])
+def test_checkpoint_requires_each_class_in_the_current_main_minimum(missing):
+    with pytest.raises(RuntimeError, match="missing required classes"):
+        validate_class_names([name for name in CANONICAL_CLASS_NAMES if name != missing])
+
+
+def test_current_checkpoint_minimum_does_not_invent_absent_violation_classes():
+    mapping = validate_class_names(["person", "helmet", "no_helmet", "vest"])
+    assert set(mapping.values()) == {"Person", "Hardhat", "NO-Hardhat", "Safety Vest"}
+    assert "NO-Safety Vest" not in mapping.values()
 
 
 def test_class_aliases_are_normalized_without_id_assumptions():
@@ -123,3 +130,24 @@ def test_corrupt_checkpoint_has_actionable_error(mock_checkpoint):
     factory.side_effect = OSError("truncated")
     with pytest.raises(RuntimeError, match="ppe_unified_best.pt"):
         PPEDetector()
+
+
+def test_ignored_and_duplicate_checkpoint_ids_never_escape_inference(mock_checkpoint):
+    _, model, _ = mock_checkpoint
+    model.names = dict(enumerate([*CANONICAL_CLASS_NAMES, "Out of scope", "worker"]))
+
+    def box(class_id):
+        return SimpleNamespace(cls=[class_id], conf=[0.99], xyxy=[[0, 0, 20, 20]])
+
+    person_id = list(CANONICAL_CLASS_NAMES).index("Person")
+    model.return_value = [
+        SimpleNamespace(
+            boxes=[
+                box(len(CANONICAL_CLASS_NAMES)),
+                box(len(CANONICAL_CLASS_NAMES) + 1),
+                box(person_id),
+            ]
+        )
+    ]
+    result = PPEDetector().detect(np.zeros((64, 64, 3), dtype=np.uint8))
+    assert len(result) == 1 and result[0].class_name == "Person"

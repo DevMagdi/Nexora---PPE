@@ -2,11 +2,16 @@ import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 import { IMAGE, mockApi, navigate } from "./fixtures"
 
-test("login uses the fixed identity and validates credentials", async ({ page }) => {
+test("login uses the fixed identity and validates credentials", async ({ page }, info) => {
   await mockApi(page, { signedIn: false })
   await page.goto("/")
   await expect(page.getByRole("heading", { name: "تسجيل الدخول" })).toBeVisible()
   await expect(page.getByRole("button", { name: /الوضع الفاتح|الوضع الداكن/ })).toHaveCount(0)
+  await page.evaluate(() => document.fonts.ready)
+  await page.screenshot({
+    path: `test-results/screenshots/login-${info.project.name}.png`,
+    fullPage: true,
+  })
   await page.getByLabel("اسم المستخدم", { exact: true }).fill("site.admin")
   await page.getByLabel("كلمة المرور", { exact: true }).fill("wrong")
   await page.getByRole("button", { name: "الدخول إلى لوحة العمليات" }).click()
@@ -89,7 +94,7 @@ test("camera creation, editing and confirmed deletion work end to end", async ({
   await page.getByRole("button", { name: "إضافة كاميرا", exact: true }).click()
   await page.getByLabel("اسم الكاميرا", { exact: true }).fill("كاميرا المستودع")
   await page.getByLabel("المصنع أو الموقع", { exact: true }).selectOption("1")
-  await page.getByLabel("رابط بث RTSP").fill("rtsp://192.168.10.25/live")
+  await page.getByLabel("رابط RTSP").fill("rtsp://192.168.10.25/live")
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "إضافة الكاميرا", exact: true })

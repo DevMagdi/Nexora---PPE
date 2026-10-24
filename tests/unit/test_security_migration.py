@@ -43,7 +43,7 @@ def test_migration_upgrades_unversioned_installation_and_removes_obsolete_scope(
     # The upgrade is repeatable without resetting users/roles or data.
     _upgrade_database_sync()
     with sqlite3.connect(path) as db:
-        assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20261024ind"
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20261024src"
         assert db.execute(
             "SELECT username,role,is_active,must_change_password,token_version FROM users ORDER BY id"
         ).fetchall() == [
@@ -77,3 +77,42 @@ def test_existing_operator_becomes_supervisor_without_losing_admin(tmp_path, mon
             ("admin",),
             ("supervisor",),
         ]
+
+
+def test_typed_source_migration_is_additive_and_preserves_existing_streams(tmp_path, monkeypatch):
+    path = tmp_path / "typed.db"
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite+aiosqlite:///{path}")
+    config = Config("alembic.ini")
+    command.upgrade(config, "20261024ind")
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO sites(name,kind,location,created_at) VALUES ('Factory','factory','Cairo','2026-01-01')"
+        )
+        for uri in [
+            "rtsp://user:secret@192.168.10.20/live",
+            "rtsps://user:secret@192.168.10.21/live",
+        ]:
+            db.execute(
+                "INSERT INTO cameras(name,source_type,source_uri,enabled_classes,is_active,created_at,site_id) VALUES ('Gate','rtsp',?,'[\"helmet\"]',1,'2026-01-01',1)",
+                (uri,),
+            )
+        db.execute(
+            "INSERT INTO violations(camera_id,violation_type,confidence,timestamp) VALUES (1,'NO-Hardhat',.9,'2026-01-01')"
+        )
+        before = db.execute(
+            "SELECT id,name,source_uri,enabled_classes,is_active,site_id FROM cameras ORDER BY id"
+        ).fetchall()
+    command.upgrade(config, "head")
+    command.upgrade(config, "head")
+    with sqlite3.connect(path) as db:
+        assert (
+            db.execute(
+                "SELECT id,name,source_uri,enabled_classes,is_active,site_id FROM cameras ORDER BY id"
+            ).fetchall()
+            == before
+        )
+        assert db.execute(
+            "SELECT source_type,auth_mode,device_index,onvif_device_uri,last_error FROM cameras ORDER BY id"
+        ).fetchall() == [("rtsp", "basic", None, None, None), ("rtsps", "basic", None, None, None)]
+        assert db.execute("SELECT violation_type FROM violations").fetchall() == [("NO-Hardhat",)]
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []

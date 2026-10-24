@@ -14,6 +14,8 @@ export async function mockApi(
     role?: "admin" | "supervisor" | "viewer"
     rotate?: boolean
     empty?: boolean
+    usb?: boolean
+    cameraFailure?: boolean
   } = {},
 ) {
   let signedIn = options.signedIn ?? true
@@ -42,6 +44,12 @@ export async function mockApi(
           enabled_classes: ["helmet", "vest"],
           is_active: false,
           is_running: false,
+          connection_status: "stopped",
+          last_error: null as string | null,
+          device_index: null as number | null,
+          port: null as number | null,
+          auth_mode: "basic",
+          onvif_device_uri: null as string | null,
           created_at: stamp,
         },
       ]
@@ -121,6 +129,14 @@ export async function mockApi(
         confidence: 0.5,
         max_upload_mb: 100,
         max_video_seconds: 120,
+        supported_source_types: ["rtsp", "rtsps", "http_mjpeg", "hls", "file", "usb"],
+        recommended_source_type: "rtsp",
+        rtsp_sources_enabled: true,
+        http_sources_enabled: true,
+        file_sources_enabled: true,
+        usb_sources_enabled: options.usb ?? false,
+        usb_device_indices: options.usb ? [0, 1] : [],
+        onvif_mode: "metadata_only",
         rules,
       })
     if (path === "/sites" && method === "GET") return json(sites)
@@ -141,12 +157,31 @@ export async function mockApi(
       sites = sites.filter((site) => site.id !== id)
       return empty()
     }
+    const cameraPayload = () => {
+      const fields = payload()
+      for (const key of ["source_username", "source_password", "clear_credentials"])
+        delete fields[key]
+      if (fields.source_uri) {
+        if (fields.source_type === "file") fields.source_uri = "Restricted video file"
+        else {
+          const uri = new URL(fields.source_uri)
+          fields.source_uri = `${uri.protocol}//${uri.host}/…`
+        }
+      }
+      return fields
+    }
     if (path === "/cameras" && method === "GET") return json(cameras)
     if (path === "/cameras" && method === "POST") {
       const camera = {
         id: cameras.length + 1,
-        ...payload(),
-        source_uri: "rtsp://192.168.10.20/…",
+        connection_status: "stopped",
+        last_error: null,
+        device_index: null,
+        port: null,
+        auth_mode: "basic",
+        onvif_device_uri: null,
+        source_uri: "Local development USB",
+        ...cameraPayload(),
         is_active: false,
         is_running: false,
         created_at: stamp,
@@ -157,7 +192,7 @@ export async function mockApi(
     if (/^\/cameras\/\d+$/.test(path) && method === "PUT") {
       const id = Number(path.split("/")[2])
       cameras = cameras.map((camera) =>
-        camera.id === id ? { ...camera, ...payload(), source_uri: camera.source_uri } : camera,
+        camera.id === id ? { ...camera, ...cameraPayload() } : camera,
       )
       return json(cameras.find((camera) => camera.id === id))
     }
@@ -168,8 +203,31 @@ export async function mockApi(
     if (/^\/cameras\/\d+\/(start|stop)$/.test(path)) {
       const id = Number(path.split("/")[2])
       const running = path.endsWith("start")
+      if (running && options.cameraFailure) {
+        const detail = "تعذّر فتح مصدر الكاميرا؛ راجع العنوان والمصادقة وسياسة الشبكة."
+        cameras = cameras.map((camera) =>
+          camera.id === id
+            ? {
+                ...camera,
+                connection_status: "error",
+                last_error: detail,
+                is_active: false,
+                is_running: false,
+              }
+            : camera,
+        )
+        return json({ detail }, 400)
+      }
       cameras = cameras.map((camera) =>
-        camera.id === id ? { ...camera, is_active: running, is_running: running } : camera,
+        camera.id === id
+          ? {
+              ...camera,
+              is_active: running,
+              is_running: running,
+              connection_status: running ? "running" : "stopped",
+              last_error: null,
+            }
+          : camera,
       )
       return json({ status: running ? "started" : "stopped", camera_id: id })
     }

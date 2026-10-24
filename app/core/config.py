@@ -75,6 +75,11 @@ class Settings(BaseSettings):
 
     # Source security (SSRF & path traversal protection)
     ALLOWED_RTSP_PREFIXES: str = ""
+    ALLOWED_HTTP_CAMERA_PREFIXES: str = ""
+    # Two explicit opt-ins, strictly development-only. Never enable in staging/prod.
+    ALLOW_LOOPBACK_HTTP_SOURCES: bool = False
+    ENABLE_USB_SOURCES: bool = False
+    ALLOWED_USB_DEVICE_INDICES: str = "0"
     ALLOWED_VIDEO_DIR: str = ""
 
     # Login defense
@@ -109,6 +114,15 @@ class Settings(BaseSettings):
     # Best-effort OpenCV queue depth for live RTSP sources; 1 favors freshness.
     RTSP_OPEN_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=60)
     RTSP_READ_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=30)
+    HTTP_SOURCE_OPEN_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=30)
+    HTTP_SOURCE_READ_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=30)
+    USB_OPEN_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=15)
+    USB_READ_TIMEOUT_SECONDS: float = Field(default=3.0, gt=0, le=10)
+    CAMERA_MAX_READ_FAILURES: int = Field(default=3, ge=1, le=30)
+    CAMERA_RECONNECT_ATTEMPTS: int = Field(default=2, ge=0, le=5)
+    CAMERA_RECONNECT_DELAY_SECONDS: float = Field(default=1.0, ge=0, le=10)
+    HLS_CACHE_MAX_MB: int = Field(default=128, ge=16, le=512)
+    HLS_DECODE_FPS: float = Field(default=5.0, gt=0, le=15)
     CAMERA_CAPTURE_BUFFER_SIZE: int = 1
     CAMERA_FIRST_FRAME_TIMEOUT_SECONDS: float = 10.0
     CAMERA_FRAME_STALE_SECONDS: float = 15.0
@@ -170,6 +184,29 @@ class Settings(BaseSettings):
                 "and set JWT_SECRET in your .env (or unset it in dev to use an "
                 "ephemeral random key)."
             )
+
+        if (self.ENABLE_USB_SOURCES or self.ALLOW_LOOPBACK_HTTP_SOURCES) and self.APP_ENV != "dev":
+            raise ValueError("USB and loopback HTTP sources are development-only")
+        if not self.usb_device_indices or any(i < 0 or i > 15 for i in self.usb_device_indices):
+            raise ValueError("ALLOWED_USB_DEVICE_INDICES must contain indices between 0 and 15")
+        for prefix in self.http_camera_prefixes:
+            parsed = urlsplit(prefix)
+            try:
+                port = parsed.port
+            except ValueError:
+                raise ValueError("Invalid ALLOWED_HTTP_CAMERA_PREFIXES port") from None
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or "*" in prefix
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or port == 0
+                or "\\" in prefix
+            ):
+                raise ValueError("Invalid ALLOWED_HTTP_CAMERA_PREFIXES entry")
 
         if self.APP_ENV != "prod":
             return self
@@ -247,8 +284,10 @@ class Settings(BaseSettings):
             ):
                 raise ValueError(f"Invalid ALLOWED_HOSTS entry: {host!r}")
 
-        if not self.rtsp_prefixes:
-            raise ValueError("Production must set ALLOWED_RTSP_PREFIXES to camera network prefixes")
+        if not self.rtsp_prefixes and not self.http_camera_prefixes:
+            raise ValueError(
+                "Production must set ALLOWED_RTSP_PREFIXES or ALLOWED_HTTP_CAMERA_PREFIXES"
+            )
         for prefix in self.rtsp_prefixes:
             parsed = urlsplit(prefix)
             try:
@@ -297,6 +336,27 @@ class Settings(BaseSettings):
             if value:
                 networks.append(ipaddress.ip_network(value, strict=False))
         return networks
+
+    @property
+    def http_camera_prefixes(self) -> list[str]:
+        return [
+            item.strip().rstrip("/")
+            for item in self.ALLOWED_HTTP_CAMERA_PREFIXES.split(",")
+            if item.strip()
+        ]
+
+    @property
+    def usb_device_indices(self) -> set[int]:
+        try:
+            return {
+                int(item.strip())
+                for item in self.ALLOWED_USB_DEVICE_INDICES.split(",")
+                if item.strip()
+            }
+        except ValueError:
+            raise ValueError(
+                "ALLOWED_USB_DEVICE_INDICES must be comma-separated integers"
+            ) from None
 
     @property
     def rtsp_prefixes(self) -> list[str]:

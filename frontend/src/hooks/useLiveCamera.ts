@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
 import { getWebSocketUrl, refreshMediaSession } from "@/lib/api"
+import { CONNECTION_LABEL } from "@/cameras/sources"
 import { normalizeLiveCounts } from "@/lib/formatters"
-import type { LiveCounts } from "@/types"
+import type { ConnectionStatus, LiveCounts } from "@/types"
 
 export default function useLiveCamera(
   cameraId: number | undefined,
@@ -29,7 +30,23 @@ export default function useLiveCamera(
         socket.onmessage = (event) => {
           if (disposed) return
           try {
-            const counts = normalizeLiveCounts(JSON.parse(event.data))
+            const data: unknown = JSON.parse(event.data)
+            if (
+              data &&
+              typeof data === "object" &&
+              "source_status" in data &&
+              typeof data.source_status === "string" &&
+              data.source_status in CONNECTION_LABEL
+            ) {
+              lastMessage = 0
+              setState({
+                id: cameraId,
+                counts: null,
+                status: CONNECTION_LABEL[data.source_status as ConnectionStatus],
+              })
+              return
+            }
+            const counts = normalizeLiveCounts(data)
             if (counts) {
               lastMessage = Date.now()
               setState({ id: cameraId, counts, status: "مباشر" })

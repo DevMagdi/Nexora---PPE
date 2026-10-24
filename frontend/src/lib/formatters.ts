@@ -50,7 +50,7 @@ export const CHART_COLORS = [
   "var(--chart-soft)",
   "var(--chart-muted)",
   "var(--chart-neutral)",
-  "var(--success)",
+  "var(--text-soft)",
 ]
 export function classLabel(value: string): string {
   return CLASS_LABELS[value] ?? "فئة غير مدعومة"

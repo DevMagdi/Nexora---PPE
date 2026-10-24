@@ -62,8 +62,16 @@ class Camera(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # rtsp | file
+    source_type: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # rtsp | rtsps | http_mjpeg | hls | file | usb
     source_uri: Mapped[str] = mapped_column(String(500), nullable=False)
+    device_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auth_mode: Mapped[str] = mapped_column(
+        String(16), default="basic", server_default="basic", nullable=False
+    )
+    onvif_device_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
     site_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sites.id", ondelete="RESTRICT"), nullable=True, index=True
     )

@@ -74,7 +74,8 @@ def _valid_docker_subnets(
     return edge, data
 
 
-def _valid_prefixes(values: list[str]) -> list[str]:
+def _valid_prefixes(values: list[str], schemes: set[str] | None = None) -> list[str]:
+    schemes = schemes or {"rtsp", "rtsps"}
     result: list[str] = []
     for item in values:
         value = item.strip().rstrip("/")
@@ -87,7 +88,7 @@ def _valid_prefixes(values: list[str]) -> list[str]:
             raise ValueError(f"Invalid camera network prefix: {item!r}") from exc
         if (
             "*" in value
-            or parsed.scheme not in {"rtsp", "rtsps"}
+            or parsed.scheme not in schemes
             or not parsed.hostname
             or parsed.username
             or parsed.password
@@ -126,9 +127,13 @@ def setup(
     https_bind_address: str,
     edge_subnet: str = "172.30.100.0/24",
     data_subnet: str = "172.30.101.0/24",
+    http_prefixes: list[str] | None = None,
 ) -> str:
     host = _valid_host(host)
-    prefixes = _valid_prefixes(prefixes)
+    prefixes = _valid_prefixes(prefixes) if prefixes else []
+    http_prefixes = _valid_prefixes(http_prefixes, {"http", "https"}) if http_prefixes else []
+    if not prefixes and not http_prefixes:
+        raise ValueError("At least one actual camera network prefix is required")
     https_bind_address = _valid_https_bind_address(https_bind_address)
     edge_network, data_network = _valid_docker_subnets(edge_subnet, data_subnet)
     if ENV_FILE.exists():
@@ -158,6 +163,9 @@ def setup(
         "BOOTSTRAP_USERNAME": "admin",
         "BOOTSTRAP_PASSWORD": _password(),
         "ALLOWED_RTSP_PREFIXES": ",".join(prefixes),
+        "ALLOWED_HTTP_CAMERA_PREFIXES": ",".join(http_prefixes),
+        "ENABLE_USB_SOURCES": "false",
+        "ALLOW_LOOPBACK_HTTP_SOURCES": "false",
         "ALLOWED_VIDEO_DIR": "/var/nexora/videos",
         "UPLOADS_DIR": "/var/nexora/videos/uploads",
         "BACKUP_ENCRYPTION_KEY": secrets.token_urlsafe(32),
@@ -195,8 +203,14 @@ def main() -> int:
     parser.add_argument(
         "--rtsp-prefix",
         action="append",
-        required=True,
-        help="Exact RTSP camera origin or host prefix; repeat for each trusted camera network",
+        default=[],
+        help="Recommended RTSP/RTSPS origin or host prefix; repeat per trusted camera network",
+    )
+    parser.add_argument(
+        "--http-prefix",
+        action="append",
+        default=[],
+        help="Explicit HTTP(S) camera/relay origin and path root; repeat per trusted source",
     )
     parser.add_argument(
         "--https-bind-address",
@@ -221,6 +235,7 @@ def main() -> int:
             args.https_bind_address,
             args.edge_subnet,
             args.data_subnet,
+            http_prefixes=args.http_prefix,
         )
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
         print(f"Setup failed: {exc}", file=sys.stderr)
@@ -234,7 +249,7 @@ def main() -> int:
         "Trust the Caddy internal CA on approved client devices; do not expose the database or app port directly."
     )
     print(
-        "Review .env and replace sample RTSP prefixes with only the customer's camera VLANs before starting."
+        "Review .env camera allowlists and permit only the customer's actual source origins and path roots."
     )
     print("Keep the generated backup key and .env backup in separate, access-controlled storage.")
     print("Start the stack with: docker compose up --build -d")

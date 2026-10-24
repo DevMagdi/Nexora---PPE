@@ -42,6 +42,7 @@
     box-sizing: border-box;
   }
   html {
+    background: var(--navy-deep);
     text-rendering: optimizeLegibility;
     -webkit-text-size-adjust: 100%;
   }
@@ -49,6 +50,7 @@
     @apply m-0 bg-background text-foreground font-sans antialiased;
     min-width: 320px;
     min-height: 100dvh;
+    background: var(--page-background);
   }
   button:not(:disabled),
   select {
@@ -72,6 +74,19 @@
     color: var(--gold);
     font-weight: 600;
   }
+  h3,
+  h4 {
+    color: var(--text-soft);
+  }
+  button,
+  input,
+  select {
+    transition:
+      background-color 180ms ease,
+      border-color 180ms ease,
+      color 180ms ease,
+      box-shadow 180ms ease;
+  }
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 3px;
@@ -82,7 +97,7 @@
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--gold-muted) var(--navy-deep);
+    scrollbar-color: var(--text-muted) var(--navy-deep);
   }
   input:-webkit-autofill {
     -webkit-box-shadow: 0 0 0 100px var(--navy-deep) inset;
@@ -101,7 +116,7 @@
     line-height: 1.8;
     letter-spacing: 0.2em;
     text-transform: uppercase;
-    color: var(--gold-soft);
+    color: var(--text-muted);
   }
   .panel {
     background: var(--card);
@@ -110,8 +125,8 @@
     box-shadow: var(--shadow-card);
   }
   .panel-header {
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border);
+    padding: 24px 28px;
+    border-bottom: 1px solid var(--separator);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -128,10 +143,10 @@
   .field {
     display: block;
     width: 100%;
-    height: 44px;
-    padding: 8px 12px;
+    height: 48px;
+    padding: 10px 16px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--navy-deep);
     color: var(--text);
     font-size: 13px;
@@ -140,8 +155,9 @@
     color: var(--text-muted);
   }
   .field:focus {
-    outline: 2px solid var(--gold-border);
-    border-color: var(--gold);
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-color: var(--border);
   }
   .field-label {
     display: block;
@@ -158,10 +174,10 @@
     align-items: center;
     gap: 6px;
     border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--accent);
-    color: var(--gold-soft);
-    padding: 4px 9px;
+    border-radius: var(--radius);
+    background: var(--navy-deep);
+    color: var(--text-soft);
+    padding: 5px 11px;
     font-size: 11px;
     font-weight: 500;
     white-space: nowrap;
@@ -169,12 +185,12 @@
   .badge-success {
     color: var(--success);
     background: var(--success-light);
-    border-color: rgba(126, 179, 148, 0.25);
+    border-color: var(--success-border);
   }
   .badge-danger {
     color: var(--destructive);
     background: var(--destructive-light);
-    border-color: rgba(239, 119, 119, 0.25);
+    border-color: var(--destructive-border);
   }
   .status-dot {
     display: inline-block;
@@ -202,7 +218,7 @@
     padding: 28px 25px;
     display: flex;
     align-items: center;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--separator);
   }
   .sidebar nav {
     padding: 24px 14px;
@@ -224,12 +240,12 @@
     padding: 12px 14px;
     text-align: start;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--radius);
     margin-bottom: 5px;
     font-size: 13px;
     transition:
-      background 0.15s,
-      color 0.15s;
+      background-color 180ms ease,
+      color 180ms ease;
   }
   .nav-item:hover {
     color: var(--text);
@@ -238,8 +254,19 @@
   .nav-item[aria-current="page"] {
     background: var(--accent);
     color: var(--gold-soft);
-    border-color: var(--border);
-    box-shadow: inset -3px 0 var(--gold);
+    border-color: transparent;
+  }
+  .nav-item {
+    position: relative;
+  }
+  .nav-item[aria-current="page"]::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    inset-block: 14px;
+    width: 2px;
+    border-radius: var(--radius);
+    background: var(--gold);
   }
   .nav-item svg {
     width: 18px;
@@ -248,7 +275,7 @@
   }
   .sidebar-footer {
     padding: 18px;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--separator);
   }
   .app-main {
     margin-inline-start: 244px;
@@ -260,20 +287,20 @@
     justify-content: space-between;
     gap: 16px;
     padding: 20px 36px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--separator);
     background: var(--background);
   }
   .workspace {
     max-width: 1600px;
     margin: 0 auto;
-    padding: 28px 36px 36px;
+    padding: 36px 40px 48px;
   }
   .page-head {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 16px;
-    margin-bottom: 24px;
+    margin-bottom: 32px;
     flex-wrap: wrap;
   }
   .page-head h1 {
@@ -287,15 +314,12 @@
     margin-top: 5px;
     line-height: 1.9;
   }
-  .page-enter {
-    animation: pageEnter 0.24s ease-out;
-  }
   .section-label {
     font-size: 11px;
-    color: var(--gold-soft);
+    color: var(--text-muted);
   }
   .metric-card {
-    padding: 22px;
+    padding: 28px;
     position: relative;
     overflow: hidden;
     min-height: 150px;
@@ -311,11 +335,11 @@
   .metric-icon {
     width: 36px;
     height: 36px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    border: 1px solid var(--separator);
+    border-radius: var(--radius);
     display: grid;
     place-items: center;
-    color: var(--gold);
+    color: var(--text-muted);
     background: var(--accent);
   }
   .metric-icon svg {
@@ -326,7 +350,7 @@
     background: var(--navy-deep);
     overflow: hidden;
     position: relative;
-    padding: 28px 30px;
+    padding: 32px 36px;
     border-radius: var(--radius);
     border: 1px solid var(--border);
   }
@@ -349,7 +373,7 @@
     font-size: 11px;
   }
   .hero-rule svg {
-    color: var(--gold);
+    color: var(--text-muted);
     width: 16px;
     height: 16px;
   }
@@ -357,13 +381,13 @@
     display: inline-flex;
     padding: 4px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--navy-deep);
     gap: 3px;
   }
   .segmented button {
     padding: 6px 13px;
-    border-radius: 5px;
+    border-radius: var(--radius);
     font-size: 12px;
     color: var(--text-muted);
   }
@@ -385,7 +409,7 @@
   .empty-state svg {
     width: 32px;
     height: 32px;
-    color: var(--gold-muted);
+    color: var(--text-muted);
     stroke-width: 1.3;
   }
   .empty-state h3 {
@@ -400,8 +424,7 @@
   }
   .skeleton {
     background: var(--accent);
-    border-radius: 6px;
-    animation: skeletonPulse 1.6s ease-in-out infinite;
+    border-radius: var(--radius);
   }
   .event-table {
     width: 100%;
@@ -416,12 +439,15 @@
   }
   .event-table th {
     font-weight: 400;
-    padding: 13px 20px;
+    padding: 16px 24px;
     text-align: start;
   }
   .event-table td {
-    padding: 16px 20px;
-    border-top: 1px solid var(--border);
+    padding: 20px 24px;
+    border-top: 1px solid var(--separator);
+  }
+  .event-table tbody tr {
+    transition: background-color 180ms ease;
   }
   .event-table tbody tr:hover {
     background: var(--accent);
@@ -448,20 +474,20 @@
     align-items: center;
     justify-content: center;
     position: relative;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--separator);
   }
   .camera-preview::before {
     content: "";
     position: absolute;
     inset: 14px;
     border: 1px solid var(--border);
-    border-radius: 5px;
-    opacity: 0.5;
+    border-radius: var(--radius);
+    opacity: 0.3;
   }
   .camera-preview > svg {
     width: 44px;
-    height: 44px;
-    color: var(--gold-muted);
+    height: 48px;
+    color: var(--text-muted);
     stroke-width: 1;
   }
   .login-screen {
@@ -507,10 +533,10 @@
   .login-input-wrap > svg {
     position: absolute;
     inset-inline-start: 14px;
-    top: 14px;
+    top: 16px;
     width: 16px;
     height: 16px;
-    color: var(--gold-muted);
+    color: var(--text-muted);
   }
   .login-input-wrap input {
     padding-inline-start: 42px;
@@ -524,7 +550,7 @@
   .login-feature > svg {
     width: 21px;
     height: 21px;
-    color: var(--gold);
+    color: var(--text-muted);
     flex-shrink: 0;
     margin-top: 3px;
   }
@@ -539,16 +565,16 @@
     margin-top: 4px;
   }
   .notice {
-    padding: 12px 15px;
+    padding: 16px 20px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--accent);
     font-size: 12px;
     color: var(--text-soft);
     line-height: 1.9;
   }
   .notice-error {
-    border-color: rgba(239, 119, 119, 0.35);
+    border-color: var(--destructive-border);
     background: var(--destructive-light);
     color: var(--destructive);
   }
@@ -558,40 +584,35 @@
     inset-inline-end: 24px;
     z-index: 100;
     max-width: min(480px, calc(100vw - 32px));
-    padding: 16px 20px;
+    padding: 20px 24px;
     display: flex;
     align-items: center;
     gap: 12px;
     background: var(--navy-deep);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius);
     box-shadow: var(--shadow-floating);
     font-size: 13px;
+  }
+  .source-help {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.9;
+  }
+  .form-section {
+    display: grid;
+    gap: 20px;
   }
   .chart-tooltip {
     background: var(--navy-deep);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 10px 14px;
     color: var(--text-soft);
     font-size: 12px;
   }
 }
 
-/* Preserve the exact text colours/contrast during navigation, not only at rest. */
-@keyframes pageEnter {
-  from {
-    transform: translateY(5px);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-@keyframes skeletonPulse {
-  50% {
-    opacity: 0.45;
-  }
-}
 @media (max-width: 1100px) {
   .sidebar {
     width: 218px;

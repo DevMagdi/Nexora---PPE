@@ -13,8 +13,9 @@ from app.alerts.base import AlertHandler
 from app.alerts.dispatcher import AlertDispatcher
 from app.alerts.email_handler import EmailHandler
 from app.alerts.webhook_handler import SlackWebhookHandler, WebhookHandler
+from app.camera.http_client import SourceError
 from app.camera.source import CameraSource
-from app.camera.source_security import validate_file_uri, validate_rtsp_uri
+from app.camera.source_security import validate_camera_source
 from app.core.config import settings
 from app.core.detector import PPEDetector
 from app.core.frame_annotator import annotate_frame
@@ -36,6 +37,7 @@ class _CameraEntry:
     frame_seq: int = 0
     last_frame_at: float = 0.0
     first_frame_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    reconnect_attempts: int = 0
     consecutive_read_failures: int = 0
     last_read_warning_at: float = 0.0
     latest_counts: dict = field(default_factory=dict)
@@ -50,6 +52,7 @@ class CameraManager:
         self.detector = detector
 
         self._entries: dict[int, _CameraEntry] = {}
+        self._states: dict[int, tuple[str, str | None]] = {}
         self._ws_subscribers: dict[int, list[asyncio.Queue]] = {}
         self._cleanup_task: asyncio.Task | None = None
         self._locks: dict[int, asyncio.Lock] = {}
@@ -107,14 +110,24 @@ class CameraManager:
 
         for cam in cameras:
             try:
-                await self._launch_camera(
+                opened = await self._launch_camera(
                     cam.id,
                     cam.source_type,
                     cam.source_uri,
                     cam.enabled_classes,
+                    **({"auth_mode": cam.auth_mode} if cam.auth_mode != "basic" else {}),
                 )
+                if not opened:
+                    await self._mark_inactive(cam.id, self.get_last_error(cam.id))
             except Exception as exc:
-                logger.warning("Failed to restore camera %d on startup: %s", cam.id, exc)
+                message = (
+                    self.get_last_error(cam.id) or "تعذّرت استعادة المصدر؛ راجع نوعه وسياسة التشغيل."
+                )
+                self._states[cam.id] = ("error", message)
+                await self._mark_inactive(cam.id, message)
+                logger.warning(
+                    "Failed to restore camera %d on startup (%s)", cam.id, type(exc).__name__
+                )
 
         self._cleanup_task = asyncio.create_task(self._cleanup_loop(), name="frame-cleanup")
 
@@ -137,20 +150,38 @@ class CameraManager:
     # Source building & validation
     # ------------------------------------------------------------------
 
-    def _build_source(self, source_type: str, source_uri: str) -> CameraSource:
-        if source_type == "rtsp":
+    def _build_source(
+        self, source_type: str, source_uri: str, auth_mode: str = "basic"
+    ) -> CameraSource:
+        index = int(source_uri) if source_type == "usb" else None
+        validated = validate_camera_source(source_type, source_uri, device_index=index)
+        if source_type in {"rtsp", "rtsps"}:
             from app.camera.rtsp_source import RTSPSource
 
-            validate_rtsp_uri(source_uri)
-            return RTSPSource(source_uri)
-
+            return RTSPSource(validated)
         if source_type == "file":
             from app.camera.file_source import FileSource
 
-            validated_path = validate_file_uri(source_uri)
-            return FileSource(validated_path)
+            return FileSource(validated)
+        if source_type == "http_mjpeg":
+            from app.camera.mjpeg_source import MJPEGSource
 
-        raise ValueError(f"Unknown source_type: {source_type!r}")
+            return MJPEGSource(validated, auth_mode)
+        if source_type == "hls":
+            from app.camera.hls_source import HLSSource
+
+            return HLSSource(validated, auth_mode)
+        if source_type == "usb":
+            from app.camera.usb_source import USBSource
+
+            return USBSource(index)
+        raise ValueError("Unknown camera source type")
+
+    def get_connection_status(self, camera_id: int) -> str:
+        return self._states.get(camera_id, ("stopped", None))[0]
+
+    def get_last_error(self, camera_id: int) -> str | None:
+        return self._states.get(camera_id, ("stopped", None))[1]
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -162,6 +193,8 @@ class CameraManager:
         source_type: str,
         source_uri: str,
         enabled_classes: list[str] | None = None,
+        *,
+        auth_mode: str = "basic",
     ) -> bool:
         async with self._get_lock(camera_id):
             if (
@@ -172,7 +205,19 @@ class CameraManager:
                 logger.warning("Camera %d already running", camera_id)
                 return False
 
-            source = self._build_source(source_type, source_uri)
+            self._states[camera_id] = ("starting", None)
+            try:
+                source = self._build_source(
+                    source_type,
+                    source_uri,
+                    **({"auth_mode": auth_mode} if auth_mode != "basic" else {}),
+                )
+            except ValueError:
+                self._states[camera_id] = (
+                    "error",
+                    "مصدر الكاميرا مرفوض؛ راجع النوع وسياسة المصادر على الخادم.",
+                )
+                raise
             logger.info(
                 "Opening industrial camera source (camera_id=%d source_type=%s)",
                 camera_id,
@@ -194,9 +239,13 @@ class CameraManager:
                 )
                 with contextlib.suppress(Exception):
                     await source.release()
-                raise ValueError(
-                    "Could not open the camera source. Check its URI, permissions, and availability."
-                ) from None
+                message = (
+                    str(exc)
+                    if isinstance(exc, SourceError)
+                    else "تعذّر فتح المصدر؛ راجع العنوان والمصادقة والصلاحيات وسياسة الشبكة."
+                )
+                self._states[camera_id] = ("error", message)
+                raise ValueError(message) from None
             if not connected:
                 logger.error(
                     "Camera source did not open (camera_id=%d source_type=%s)",
@@ -205,6 +254,10 @@ class CameraManager:
                 )
                 with contextlib.suppress(Exception):
                     await source.release()
+                self._states[camera_id] = (
+                    "error",
+                    "تعذّر فتح المصدر؛ راجع الجهاز والعنوان وبيانات المصادقة.",
+                )
                 return False
 
             entry = _CameraEntry(
@@ -223,7 +276,10 @@ class CameraManager:
 
     async def _wait_for_first_frame(self, entry: _CameraEntry) -> bool:
         if entry.first_frame_ready.is_set():
-            return self.is_running(entry.camera_id)
+            return (
+                self.is_running(entry.camera_id)
+                or self.get_connection_status(entry.camera_id) == "completed"
+            )
         if entry.task is None or entry.task.done():
             return False
 
@@ -239,7 +295,10 @@ class CameraManager:
                 frame_waiter.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await frame_waiter
-        return entry.first_frame_ready.is_set() and self.is_running(entry.camera_id)
+        return entry.first_frame_ready.is_set() and (
+            self.is_running(entry.camera_id)
+            or self.get_connection_status(entry.camera_id) == "completed"
+        )
 
     async def start_camera(
         self,
@@ -247,6 +306,8 @@ class CameraManager:
         source_type: str,
         source_uri: str,
         enabled_classes: list[str] | None = None,
+        *,
+        auth_mode: str = "basic",
     ) -> bool:
         existing = self._entries.get(camera_id)
         if existing and existing.task and not existing.task.done():
@@ -258,7 +319,13 @@ class CameraManager:
             logger.warning("Restarting camera %d because no fresh frame is available", camera_id)
             await self.stop_camera(camera_id)
 
-        if not await self._launch_camera(camera_id, source_type, source_uri, enabled_classes):
+        if not await self._launch_camera(
+            camera_id,
+            source_type,
+            source_uri,
+            enabled_classes,
+            **({"auth_mode": auth_mode} if auth_mode != "basic" else {}),
+        ):
             return False
 
         entry = self._entries.get(camera_id)
@@ -268,17 +335,24 @@ class CameraManager:
                 camera_id,
                 settings.CAMERA_FIRST_FRAME_TIMEOUT_SECONDS,
             )
-            await self.stop_camera(camera_id)
-            raise ValueError(
-                "The camera opened but no video frame arrived in time. Check the RTSP address, "
-                "network access, camera credentials and video availability."
+            message = (
+                (
+                    self.get_last_error(camera_id)
+                    if self.get_connection_status(camera_id) == "error"
+                    else None
+                )
+                or "فُتح المصدر لكن لم يصل إطار فيديو في المهلة المحددة؛ راجع العنوان والمصادقة وتوفّر الفيديو."
             )
+            await self.stop_camera(camera_id)
+            self._states[camera_id] = ("error", message)
+            raise ValueError(message)
 
         logger.info("Camera %d is live and its first processed frame is ready", camera_id)
         return True
 
     async def stop_camera(self, camera_id: int) -> bool:
         async with self._get_lock(camera_id):
+            self._states[camera_id] = ("stopped", None)
             entry = self._entries.get(camera_id)
             if entry is None:
                 return False
@@ -391,27 +465,67 @@ class CameraManager:
         try:
             while True:
                 cycle_started = time.perf_counter()
-                frame = await entry.source.read_frame()
+                try:
+                    frame = await entry.source.read_frame()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Camera %d read failed (%s)", camera_id, type(exc).__name__)
+                    if isinstance(exc, SourceError):
+                        self._states[camera_id] = ("retrying", str(exc))
+                    frame = None
                 if frame is None:
                     if getattr(entry.source, "exhausted", False):
+                        self._states[camera_id] = ("completed", None)
+                        await self._broadcast(camera_id, {"source_status": "completed"})
                         logger.info("Camera %d video processing completed", camera_id)
                         break
                     checker.reset(camera_id)
+                    # Never serve an old image/counts as a fresh live feed during retries.
+                    entry.latest_frame, entry.latest_counts, entry.last_frame_at = None, {}, 0.0
+                    entry.first_frame_ready.clear()
                     entry.consecutive_read_failures += 1
-                    now = time.monotonic()
-                    if (
-                        entry.consecutive_read_failures == 1
-                        or now - entry.last_read_warning_at >= 5.0
-                    ):
-                        logger.warning(
-                            "Camera %d source is open but returned no frame (%d consecutive read failures)",
-                            camera_id,
-                            entry.consecutive_read_failures,
-                        )
-                        entry.last_read_warning_at = now
+                    if entry.consecutive_read_failures == 1:
+                        await self._broadcast(camera_id, {"source_status": "retrying"})
+                    message = (
+                        self.get_last_error(camera_id)
+                        or "انقطع إدخال الفيديو؛ تجري محاولة اتصال محدودة."
+                    )
+                    self._states[camera_id] = ("retrying", message)
+                    if entry.consecutive_read_failures >= settings.CAMERA_MAX_READ_FAILURES:
+                        connected = False
+                        if getattr(entry.source, "reconnect_allowed", True):
+                            await entry.source.release()
+                            while entry.reconnect_attempts < settings.CAMERA_RECONNECT_ATTEMPTS:
+                                entry.reconnect_attempts += 1
+                                await asyncio.sleep(settings.CAMERA_RECONNECT_DELAY_SECONDS)
+                                try:
+                                    connected = await entry.source.connect()
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Camera %d reconnect failed (%s)",
+                                        camera_id,
+                                        type(exc).__name__,
+                                    )
+                                    if isinstance(exc, SourceError):
+                                        message = str(exc)
+                                    with contextlib.suppress(Exception):
+                                        await entry.source.release()
+                                if connected:
+                                    break
+                        if not connected:
+                            self._states[camera_id] = (
+                                "error",
+                                message + " توقّفت المحاولات؛ راجع المصدر ثم أعد التشغيل.",
+                            )
+                            break
+                        entry.consecutive_read_failures = 0
                     await asyncio.sleep(settings.FRAME_READ_RETRY_DELAY_SECONDS)
                     continue
 
+                self._states[camera_id] = ("running", None)
                 if entry.consecutive_read_failures:
                     logger.info(
                         "Camera %d recovered frame input after %d failed read(s)",
@@ -486,15 +600,26 @@ class CameraManager:
         except asyncio.CancelledError:
             cancelled = True
         except Exception as exc:
+            self._states[camera_id] = (
+                "error",
+                "توقّفت معالجة الكاميرا؛ راجع المصدر وسجل التشغيل الآمن.",
+            )
             logger.error("Camera %d processing failed (%s)", camera_id, type(exc).__name__)
         finally:
             checker.reset(camera_id)
-            await entry.source.release()
+            with contextlib.suppress(Exception):
+                await entry.source.release()
             if not cancelled:
-                await self._mark_inactive(camera_id)
+                error = self.get_last_error(camera_id)
+                if error:
+                    await self._broadcast(camera_id, {"source_status": "error"})
+                    entry.latest_frame, entry.latest_counts, entry.last_frame_at = None, {}, 0.0
+                    await self._mark_inactive(camera_id, error)
+                else:
+                    await self._mark_inactive(camera_id)
 
     @staticmethod
-    async def _mark_inactive(camera_id: int) -> None:
+    async def _mark_inactive(camera_id: int, last_error: str | None = None) -> None:
         from app.db.models import Camera
         from app.db.session import AsyncSessionLocal
 
@@ -503,6 +628,7 @@ class CameraManager:
                 camera = await session.get(Camera, camera_id)
                 if camera:
                     camera.is_active = False
+                    camera.last_error = last_error
                     await session.commit()
         except Exception:
             logger.warning("Could not mark completed camera %d inactive", camera_id)

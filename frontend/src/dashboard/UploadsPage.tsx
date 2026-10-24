@@ -98,15 +98,15 @@ export default function UploadsPage({
             mutation.mutate()
           }}
         >
-          <div className="rounded-xl border border-dashed border-primary/40 bg-muted p-6 text-center">
-            <Upload className="mx-auto mb-4 size-8 text-primary" strokeWidth={1.3} />
+          <div className="rounded-lg border border-dashed border-border bg-muted p-6 text-center">
+            <Upload className="mx-auto mb-4 size-8 text-muted-foreground" strokeWidth={1.3} />
             <label htmlFor="industrial-upload" className="mb-3 block text-sm text-foreground">
               {mode === "image" ? "اختر صورة من موقع العمل" : "اختر مقطع فيديو من الموقع"}
             </label>
             <input
               ref={input}
               id="industrial-upload"
-              className="w-full text-[11px] text-muted-foreground file:me-3 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-card file:px-3 file:py-2 file:text-primary"
+              className="w-full text-[11px] text-muted-foreground file:me-3 file:cursor-pointer file:rounded-lg file:border file:border-border file:bg-card file:px-3 file:py-2 file:text-muted-foreground"
               type="file"
               required
               disabled={mutation.isPending}
@@ -163,7 +163,7 @@ export default function UploadsPage({
             type="submit"
             disabled={!file || !rules.length || mutation.isPending}
           >
-            {mutation.isPending ? <Loader2 className="animate-spin" /> : <ScanLine />}
+            {mutation.isPending ? <Loader2 /> : <ScanLine />}
             {mutation.isPending
               ? "جارٍ المعالجة…"
               : mode === "image"
@@ -194,7 +194,7 @@ export default function UploadsPage({
               src={image.preview}
               alt="نتيجة رصد معدات الوقاية في الصورة المرفوعة"
             />
-            <div className="p-5">
+            <div className="p-6">
               <p className="mb-4 text-xs text-muted-foreground">
                 {num(image.detections.length)} كشف ·{" "}
                 <span className="latin">

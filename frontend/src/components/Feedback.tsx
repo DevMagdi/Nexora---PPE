@@ -6,7 +6,7 @@ import { getErrorMessage } from "@/lib/utils"
 export function Loading({ label = "جارٍ تحميل البيانات…" }: { label?: string }) {
   return (
     <div role="status" className="empty-state">
-      <Loader2 className="animate-spin" />
+      <Loader2 />
       <p>{label}</p>
     </div>
   )

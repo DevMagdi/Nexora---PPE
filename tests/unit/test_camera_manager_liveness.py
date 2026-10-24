@@ -64,7 +64,7 @@ async def test_start_camera_fails_clearly_and_releases_source_without_frames(mon
     monkeypatch.setattr(settings, "CAMERA_FIRST_FRAME_TIMEOUT_SECONDS", 0.04)
     monkeypatch.setattr(settings, "FRAME_READ_RETRY_DELAY_SECONDS", 0.001)
 
-    with pytest.raises(ValueError, match="no video frame arrived"):
+    with pytest.raises(ValueError, match="لم يصل إطار فيديو"):
         await manager.start_camera(2, "rtsp", "rtsp://192.168.10.20/live")
 
     assert source.released is True

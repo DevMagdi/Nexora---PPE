@@ -67,7 +67,7 @@ function Navigation({ tab, onNavigate, role, model }: Omit<Props, "open" | "onCl
       </nav>
       <div className="sidebar-footer">
         <div className="rounded-lg border border-border bg-card p-3">
-          <div className="mb-2 flex items-center gap-2 text-[11px] text-primary">
+          <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
             <ShieldCheck className="size-4" />
             نظام صناعي موحّد
           </div>
@@ -76,7 +76,7 @@ function Navigation({ tab, onNavigate, role, model }: Omit<Props, "open" | "onCl
           </div>
           <div className="mt-2 text-[10px] text-muted-foreground">
             حد الثقة:{" "}
-            <span className="latin text-primary">
+            <span className="latin text-muted-foreground">
               {model ? `${Math.round(model.confidence * 100)}%` : "—"}
             </span>{" "}
             · استدلال محلي
