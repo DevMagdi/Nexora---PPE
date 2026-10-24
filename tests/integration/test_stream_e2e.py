@@ -53,7 +53,7 @@ class LiveFakeManager:
     ) -> None:
         self.frame = frame
         self.running = running
-        self.counts = counts if counts is not None else {"person": 2, "no_mask": 1}
+        self.counts = counts if counts is not None else {"person": 2, "no_hardhat": 1}
         self.running_calls = list(running_calls) if running_calls is not None else []
         self.subscribed = 0
         self.unsubscribed = 0
@@ -127,7 +127,6 @@ async def seeded_db(engine):
             User(
                 username="admin",
                 password_hash=hash_password("admin123"),
-                sector="both",
                 role="admin",
                 is_active=True,
                 must_change_password=False,
@@ -136,9 +135,8 @@ async def seeded_db(engine):
         )
         session.add(
             User(
-                username="med",
-                password_hash=hash_password("medpass123"),
-                sector="medical",
+                username="viewer",
+                password_hash=hash_password("ViewerPass123!"),
                 role="viewer",
                 is_active=True,
                 must_change_password=False,
@@ -148,10 +146,9 @@ async def seeded_db(engine):
         session.add(
             Camera(
                 id=CAMERA_ID,
-                name="Medical Cam",
-                source_type="webcam",
-                source_uri="0",
-                profile="medical",
+                name="Factory Gate",
+                source_type="rtsp",
+                source_uri="rtsp://192.168.10.20/live",
                 enabled_classes=[],
                 is_active=True,
             )
@@ -159,10 +156,9 @@ async def seeded_db(engine):
         session.add(
             Camera(
                 id=5,
-                name="Construction Cam",
-                source_type="webcam",
-                source_uri="1",
-                profile="construction",
+                name="Warehouse Dock",
+                source_type="rtsp",
+                source_uri="rtsp://192.168.10.21/live",
                 enabled_classes=[],
                 is_active=False,
             )
@@ -182,7 +178,7 @@ def app(seeded_db: AsyncSession, engine, monkeypatch) -> FastAPI:
         yield seeded_db
 
     application.dependency_overrides[get_db] = override_db
-    application.state.detectors = {"construction": object(), "medical": object()}
+    application.state.detector = object()
     application.state.camera_manager = LiveFakeManager(_tiny_jpeg())
     return application
 
@@ -195,7 +191,6 @@ def client(app: FastAPI) -> Iterator[TestClient]:
         yield c
 
 
-
 def _expect_ws_rejection(client: TestClient, url: str, headers: dict) -> tuple[int, str]:
     """يجبر مصافحة WebSocket أن تكتمل ثم يعيد (code, reason) من الرفض."""
     with (
@@ -204,6 +199,7 @@ def _expect_ws_rejection(client: TestClient, url: str, headers: dict) -> tuple[i
     ):
         pass
     return exc_info.value.code, exc_info.value.reason
+
 
 def _login(client: TestClient) -> None:
     response = client.post(
@@ -219,7 +215,9 @@ def _ws_cookie_header(client: TestClient) -> str:
     return f"{media_cookie_name()}={token}"
 
 
-def test_login_then_media_token_then_mjpeg_then_websocket_e2e(app: FastAPI, client: TestClient) -> None:
+def test_login_then_media_token_then_mjpeg_then_websocket_e2e(
+    app: FastAPI, client: TestClient
+) -> None:
     """دورة اللاوج الكاملة: تسجيل → توكن ميديا → MJPEG → WebSocket."""
     _login(client)
     assert client.cookies.get(media_cookie_name())
@@ -249,7 +247,7 @@ def test_login_then_media_token_then_mjpeg_then_websocket_e2e(app: FastAPI, clie
     ) as websocket:
         counts = websocket.receive_json()
         assert counts["person"] == 2
-        assert counts["no_mask"] == 1
+        assert counts["no_hardhat"] == 1
 
 
 def test_websocket_accepts_exact_same_origin(client: TestClient) -> None:
@@ -306,7 +304,7 @@ def test_websocket_rejects_when_camera_not_running(app: FastAPI, client: TestCli
     assert reason == "Camera not running"
 
 
-def test_websocket_enforces_sector_isolation(engine, seeded_db: AsyncSession, monkeypatch) -> None:
+def test_viewer_can_monitor_industrial_camera(engine, seeded_db: AsyncSession, monkeypatch) -> None:
     monkeypatch.setattr(stream, "AsyncSessionLocal", _PatchedSessionLocal(seeded_db))
     application = create_app()
     application.router.lifespan_context = _noop_lifespan
@@ -315,26 +313,20 @@ def test_websocket_enforces_sector_isolation(engine, seeded_db: AsyncSession, mo
         yield seeded_db
 
     application.dependency_overrides[get_db] = override_db
-    application.state.detectors = {"construction": object(), "medical": object()}
+    application.state.detector = object()
     application.state.camera_manager = LiveFakeManager(_tiny_jpeg())
 
     with TestClient(application, base_url="http://127.0.0.1:8000") as client:
         response = client.post(
             "/api/v1/auth/login",
-            data={"username": "med", "password": "medpass123"},
+            data={"username": "viewer", "password": "ViewerPass123!"},
         )
         assert response.status_code == 200
-        # مستخدم medical يحاول يفتح كاميرا construction → مرفوض قبل قبول الاتصال
-        code, reason = _expect_ws_rejection(
-            client,
-            "/api/v1/ws/5",
-            headers={
-                "origin": "http://testserver",
-                "cookie": _ws_cookie_header(client),
-            },
-        )
-        assert code == 1008
-        assert reason == "Forbidden"
+        with client.websocket_connect(
+            f"/api/v1/ws/{CAMERA_ID}",
+            headers={"origin": "http://testserver", "cookie": _ws_cookie_header(client)},
+        ) as websocket:
+            assert websocket.receive_json()["person"] == 2
 
 
 def test_websocket_rejects_unknown_camera(client: TestClient) -> None:

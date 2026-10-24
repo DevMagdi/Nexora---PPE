@@ -5,6 +5,7 @@ Revises:
 Create Date: 2026-10-10 14:41:54.565368
 
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -30,7 +31,9 @@ def upgrade() -> None:
             sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column("username", sa.String(length=100), nullable=False),
             sa.Column("password_hash", sa.String(length=255), nullable=False),
-            sa.Column("sector", sa.String(length=20), nullable=False, server_default="construction"),
+            sa.Column(
+                "sector", sa.String(length=20), nullable=False, server_default="construction"
+            ),
             sa.Column("created_at", sa.DateTime(), nullable=False),
         )
         op.create_index("ix_users_id", "users", ["id"], unique=False)
@@ -43,7 +46,9 @@ def upgrade() -> None:
             sa.Column("name", sa.String(length=100), nullable=False),
             sa.Column("source_type", sa.String(length=20), nullable=False),
             sa.Column("source_uri", sa.String(length=500), nullable=False),
-            sa.Column("profile", sa.String(length=20), nullable=False, server_default="construction"),
+            sa.Column(
+                "profile", sa.String(length=20), nullable=False, server_default="construction"
+            ),
             sa.Column("enabled_classes", sa.JSON(), nullable=False),
             sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.false()),
             sa.Column("created_at", sa.DateTime(), nullable=False),
@@ -68,7 +73,9 @@ def upgrade() -> None:
         )
         op.create_index("ix_violations_id", "violations", ["id"], unique=False)
         op.create_index("ix_violations_camera_id", "violations", ["camera_id"], unique=False)
-        op.create_index("ix_violations_violation_type", "violations", ["violation_type"], unique=False)
+        op.create_index(
+            "ix_violations_violation_type", "violations", ["violation_type"], unique=False
+        )
         op.create_index("ix_violations_timestamp", "violations", ["timestamp"], unique=False)
 
     if "alert_log" not in existing_tables:

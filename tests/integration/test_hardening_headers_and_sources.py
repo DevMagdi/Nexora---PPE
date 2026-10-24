@@ -8,7 +8,7 @@ async def test_security_headers_and_no_store_on_api(test_client):
     response = await test_client.get("/api/v1/health")
     assert response.status_code == 200
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["x-frame-options"] == "DENY"
+    assert "x-frame-options" not in response.headers  # development preview may be embedded
     assert response.headers["referrer-policy"] == "no-referrer"
     assert response.headers["cache-control"] == "no-store"
 
@@ -38,7 +38,9 @@ async def test_network_camera_is_denied_by_empty_default_allowlist(test_client, 
     assert "configure ALLOWED_RTSP_PREFIXES" in response.json()["detail"]
 
 
-async def test_camera_source_credentials_are_not_returned_to_frontend(test_client, db_session, monkeypatch):
+async def test_camera_source_credentials_are_not_returned_to_frontend(
+    test_client, db_session, monkeypatch
+):
     monkeypatch.setattr(settings, "ALLOWED_RTSP_PREFIXES", "rtsp://192.168.10.")
     private_uri = "rtsp://camera-user:CameraSecret!@192.168.10.20:554/stream?profile=main"
     response = await test_client.post(

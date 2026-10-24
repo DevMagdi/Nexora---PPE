@@ -35,7 +35,9 @@ def test_rtsp_blocks_open_defaults_and_local_metadata(monkeypatch):
     with pytest.raises(ValueError, match="disabled"):
         validate_rtsp_uri("rtsp://192.168.10.23/stream")
 
-    monkeypatch.setattr(settings, "ALLOWED_RTSP_PREFIXES", "http://127.0.0.1,http://169.254.169.254")
+    monkeypatch.setattr(
+        settings, "ALLOWED_RTSP_PREFIXES", "http://127.0.0.1,http://169.254.169.254"
+    )
     for uri in (
         "http://127.0.0.1/latest/meta-data/",
         "http://169.254.169.254/latest/meta-data/",
@@ -73,8 +75,7 @@ def test_file_sources_are_disabled_without_directory(monkeypatch):
         validate_file_uri("clip.mp4")
 
 
-def test_webcam_validation_rejects_negative_and_non_integer():
-    assert validate_camera_source("webcam", "0") == "0"
-    for value in ("-1", "0; rm -rf /", "not-a-number"):
-        with pytest.raises(ValueError):
-            validate_camera_source("webcam", value)
+@pytest.mark.parametrize("source_type", ["unsupported", "browser-device", "http"])
+def test_source_types_are_closed(source_type):
+    with pytest.raises(ValueError, match="Unknown source_type"):
+        validate_camera_source(source_type, "0")

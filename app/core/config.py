@@ -70,7 +70,6 @@ class Settings(BaseSettings):
     MEDIA_COOKIE_NAME: str = "nexora_media"
     BOOTSTRAP_USERNAME: str = "admin"
     BOOTSTRAP_PASSWORD: str = Field(default_factory=generate_password)
-    BOOTSTRAP_SECTOR: Literal["construction", "medical", "both"] = "both"
     BACKUP_ENCRYPTION_KEY: str = ""
     BACKUP_DIR: str = "backups"
 
@@ -84,46 +83,14 @@ class Settings(BaseSettings):
     LOGIN_LOCKOUT_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 15
 
-    # Construction Model
-    CONSTRUCTION_MODEL_PATH: str = "Model/ppe.pt"
-    CONSTRUCTION_DETECTION_CONFIDENCE: float = 0.25
-    CONSTRUCTION_DEFAULT_CLASS_CONF: float = 0.35
-    CONSTRUCTION_CLASS_CONF_THRESHOLDS: str = ""
-
-    # Medical Model
-    MEDICAL_MODEL_PATH: str = "Model/bestMedicalModel_FINAL.pt"
-    MEDICAL_DETECTION_CONFIDENCE: float = 0.25
-    MEDICAL_DEFAULT_CLASS_CONF: float = 0.35
-    MEDICAL_CLASS_CONF_THRESHOLDS: str = ""
-
-    DETECTION_CONFIDENCE_FLOOR: float = 0.25
-
-    # Hybrid detector
-    HYBRID_DETECTION_ENABLED: bool = True
-    HYBRID_CONSTRUCTION_ON_MEDICAL: bool = True
-    HYBRID_MEDICAL_ON_CONSTRUCTION: bool = False
-    HYBRID_MERGE_IOU: float = 0.55
-    HYBRID_CONFLICT_IOU: float = 0.30
-    HYBRID_OVERRIDE_MIN_CONTAINMENT: float = 0.45
-    HYBRID_HEAD_REGION_RATIO: float = 0.32
-
-    # Skin filter heuristics
-    SKIN_FILTER_ENABLED: bool = True
-    SKIN_BARE_HAND_ENABLED: bool = True
-    SKIN_EYE_BRIDGE_ENABLED: bool = True
-    SKIN_MIN_RATIO: float = 0.18
-    SKIN_STRONG_RATIO: float = 0.32
-    SKIN_GLOVE_REJECT_RATIO: float = 0.24
-    SKIN_BARE_HAND_MIN_THICKNESS: float = 0.12
-    SKIN_BARE_HAND_MIN_AREA: float = 0.10
-    SKIN_EYE_BRIDGE_MIN_SKIN_RATIO: float = 0.22
-    SKIN_GLASS_CONFIRM_MIN_RATIO: float = 0.05
-    SKIN_SYNTHETIC_MIN_CONF: float = 0.45
-    SKIN_SYNTHETIC_MAX_CONF: float = 0.85
-    SKIN_NEGATIVE_MIN_CONF: float = 0.70
-    SKIN_MIN_PERSON_CONF: float = 0.35
-    SKIN_POSITIVE_OVERRIDE_MAX_CONF: float = 0.60
-    SKIN_POSITIVE_OVERRIDE_MIN_CONF: float = 0.70
+    # Exactly one deployment artifact; no fallback or secondary detector.
+    PPE_MODEL_PATH: str = "Model/ppe_unified_best.pt"
+    PPE_MODEL_SHA256: str = ""
+    DETECTION_CONFIDENCE: float = Field(default=0.50, ge=0.45, le=0.95)
+    UPLOADS_DIR: str = "videos/uploads"
+    MAX_UPLOAD_MB: int = Field(default=100, ge=1, le=1024)
+    MAX_IMAGE_PIXELS: int = Field(default=24_000_000, ge=1)
+    MAX_UPLOAD_VIDEO_SECONDS: int = Field(default=120, ge=1, le=3600)
 
     # Violation frames storage
     FRAMES_DIR: str = "violation_frames"
@@ -134,13 +101,14 @@ class Settings(BaseSettings):
     ALERT_COOLDOWN_SECONDS: int = 60
     VIOLATION_PERSIST_SECONDS: int = 8
     VIOLATION_PERSIST_FLOOR_SECONDS: int = 8
-    MEDICAL_VIOLATION_PERSIST_SECONDS: int = 3
     ALERT_DISPLAY_SECONDS: float = 3.0
 
     # Camera loop timing
     FRAME_READ_RETRY_DELAY_SECONDS: float = 0.05
     STREAM_FPS_DELAY_SECONDS: float = 0.04
-    # Best-effort OpenCV queue depth for live webcam/RTSP sources; 1 favors freshness.
+    # Best-effort OpenCV queue depth for live RTSP sources; 1 favors freshness.
+    RTSP_OPEN_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=60)
+    RTSP_READ_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=30)
     CAMERA_CAPTURE_BUFFER_SIZE: int = 1
     CAMERA_FIRST_FRAME_TIMEOUT_SECONDS: float = 10.0
     CAMERA_FRAME_STALE_SECONDS: float = 15.0
@@ -160,6 +128,18 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> Settings:
+        from app.core.model_policy import validate_model_path
+
+        validate_model_path(self.PPE_MODEL_PATH)
+        if self.PPE_MODEL_SHA256 and (
+            len(self.PPE_MODEL_SHA256) != 64
+            or any(c not in "0123456789abcdef" for c in self.PPE_MODEL_SHA256.lower())
+        ):
+            raise ValueError("PPE_MODEL_SHA256 must be a 64-character SHA-256 hex digest")
+        if self.VIOLATION_PERSIST_SECONDS < 1 or self.VIOLATION_PERSIST_FLOOR_SECONDS < 1:
+            raise ValueError("Violation persistence settings must be positive")
+        if self.ALERT_COOLDOWN_SECONDS < 1:
+            raise ValueError("ALERT_COOLDOWN_SECONDS must be positive")
         for proxy in self.TRUSTED_PROXIES.split(","):
             if proxy.strip():
                 ipaddress.ip_network(proxy.strip(), strict=False)
@@ -228,7 +208,9 @@ class Settings(BaseSettings):
 
         origins = self.cors_origins
         if not origins or any("*" in origin for origin in origins):
-            raise ValueError("Production CORS_ORIGINS must contain exact trusted origins; wildcards are forbidden")
+            raise ValueError(
+                "Production CORS_ORIGINS must contain exact trusted origins; wildcards are forbidden"
+            )
         for origin in origins:
             parsed = urlsplit(origin)
             try:
@@ -244,7 +226,9 @@ class Settings(BaseSettings):
 
         hosts = self.allowed_hosts
         if not hosts or any("*" in host for host in hosts):
-            raise ValueError("Production ALLOWED_HOSTS must list exact hostnames; wildcards are forbidden")
+            raise ValueError(
+                "Production ALLOWED_HOSTS must list exact hostnames; wildcards are forbidden"
+            )
         for host in hosts:
             parsed_host = urlsplit(f"//{host}")
             try:
@@ -275,7 +259,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"Invalid ALLOWED_RTSP_PREFIXES entry: {prefix!r}") from exc
             if (
                 "*" in prefix
-                or parsed.scheme not in {"rtsp", "rtsps", "http", "https"}
+                or parsed.scheme not in {"rtsp", "rtsps"}
                 or not parsed.hostname
                 or parsed.username
                 or parsed.password
@@ -297,7 +281,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [origin.strip().rstrip("/") for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        return [
+            origin.strip().rstrip("/") for origin in self.CORS_ORIGINS.split(",") if origin.strip()
+        ]
 
     @property
     def allowed_hosts(self) -> list[str]:
@@ -314,22 +300,11 @@ class Settings(BaseSettings):
 
     @property
     def rtsp_prefixes(self) -> list[str]:
-        return [item.strip().rstrip("/") for item in self.ALLOWED_RTSP_PREFIXES.split(",") if item.strip()]
-
-    @staticmethod
-    def parse_class_thresholds_str(value: str) -> dict[int, float]:
-        """Parse ``'10:0.40,8:0.20'`` into ``{10: 0.40, 8: 0.20}``."""
-        result: dict[int, float] = {}
-        for part in (value or "").split(","):
-            part = part.strip()
-            if not part or ":" not in part:
-                continue
-            key, threshold = part.split(":", 1)
-            try:
-                result[int(key.strip())] = float(threshold.strip())
-            except ValueError:
-                continue
-        return result
+        return [
+            item.strip().rstrip("/")
+            for item in self.ALLOWED_RTSP_PREFIXES.split(",")
+            if item.strip()
+        ]
 
 
 settings = Settings()

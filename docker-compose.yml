@@ -15,11 +15,11 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:?Run scripts/setup_onprem.py to set the trusted Caddy address}
       ALLOWED_RTSP_PREFIXES: ${ALLOWED_RTSP_PREFIXES:?Set camera network allowlists in .env}
       ALLOWED_VIDEO_DIR: /var/nexora/videos
+      UPLOADS_DIR: /var/nexora/videos/uploads
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Run scripts/setup_onprem.py first}
       BACKUP_DIR: /var/nexora/backups
-      CONSTRUCTION_MODEL_PATH: Model/ppe.pt
-      MEDICAL_MODEL_PATH: Model/bestMedicalModel_FINAL.pt
-      HYBRID_DETECTION_ENABLED: "true"
+      PPE_MODEL_PATH: /app/Model/ppe_unified_best.pt
+      DETECTION_CONFIDENCE: "0.50"
     env_file:
       - .env
     command:
@@ -42,7 +42,13 @@ services:
       data: {}
     volumes:
       - violation_frames:/app/violation_frames
-      - ./videos:/var/nexora/videos:ro
+      - videos:/var/nexora/videos
+      - type: bind
+        source: ./Model/ppe_unified_best.pt
+        target: /app/Model/ppe_unified_best.pt
+        read_only: true
+        bind:
+          create_host_path: false
       - encrypted_backups:/var/nexora/backups
     security_opt:
       - no-new-privileges:true
@@ -91,6 +97,7 @@ services:
 volumes:
   postgres_data:
   violation_frames:
+  videos:
   encrypted_backups:
   caddy_data:
   caddy_config:

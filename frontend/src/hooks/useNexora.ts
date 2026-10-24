@@ -1,166 +1,60 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { CameraCreatePayload, CameraUpdatePayload } from "@/types"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  createCamera,
-  deleteCamera,
-  downloadViolationsCsv,
   getCameras,
+  getDashboard,
   getHealth,
-  getPPEClassesMeta,
+  getSites,
+  getSystemMeta,
+  getUsers,
   getViolations,
-  login,
   me,
-  resolveViolation,
-  changePassword,
-  startCamera,
-  stopCamera,
-  updateCamera,
 } from "@/lib/api"
+import type { RangeKey, ViolationFilters } from "@/types"
 
 export function useMe() {
-  return useQuery({
-    queryKey: ["me"],
-    queryFn: me,
-    // A 401 before sign-in is the expected anonymous session check, not a retryable failure.
-    retry: false,
-    staleTime: 30_000,
-  })
+  return useQuery({ queryKey: ["me"], queryFn: me, retry: false, staleTime: 30_000 })
 }
-
-export function useLogin() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (vars: { username: string; password: string }) => {
-      return await login(vars.username, vars.password)
-    },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] })
-      await qc.invalidateQueries({ queryKey: ["cameras"] })
-      await qc.invalidateQueries({ queryKey: ["ppe-meta"] })
-      await qc.invalidateQueries({ queryKey: ["health"] })
-    },
-  })
+export function useCameras() {
+  return useQuery({ queryKey: ["cameras"], queryFn: getCameras, refetchInterval: 5_000 })
 }
-
-export function useChangePassword() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (vars: { currentPassword: string; newPassword: string }) =>
-      changePassword(vars.currentPassword, vars.newPassword),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["me"] })
-    },
-  })
+export function useSites() {
+  return useQuery({ queryKey: ["sites"], queryFn: getSites })
 }
-
+export function useSystem() {
+  return useQuery({ queryKey: ["system"], queryFn: getSystemMeta, staleTime: 60_000 })
+}
 export function useHealth() {
   return useQuery({
     queryKey: ["health"],
     queryFn: getHealth,
+    refetchInterval: 15_000,
+    retry: false,
+  })
+}
+export function useDashboard(range: RangeKey, siteId?: number) {
+  return useQuery({
+    queryKey: ["dashboard", range, siteId],
+    queryFn: () => getDashboard(range, siteId),
     refetchInterval: 10_000,
   })
 }
-
-export function usePPEClassesMeta(profile?: "construction" | "medical", enabled = true) {
+export function useViolations(params: ViolationFilters) {
   return useQuery({
-    queryKey: ["ppe-meta", profile ?? "auto"],
-    queryFn: () => getPPEClassesMeta(profile),
-    staleTime: 60_000,
-    enabled,
-  })
-}
-
-export function useCameras() {
-  return useQuery({
-    queryKey: ["cameras"],
-    queryFn: getCameras,
-    refetchInterval: 5_000,
-  })
-}
-
-export function useCreateCamera() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (payload: CameraCreatePayload) => createCamera(payload),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["cameras"] })
-    },
-  })
-}
-
-export function useUpdateCamera() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (vars: { id: number; payload: CameraUpdatePayload }) =>
-      updateCamera(vars.id, vars.payload),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["cameras"] })
-    },
-  })
-}
-
-export function useDeleteCamera() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: number) => deleteCamera(id),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["cameras"] })
-    },
-  })
-}
-
-export function useStartCamera() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (id: number) => {
-      await startCamera(id)
-      return id
-    },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["cameras"] })
-    },
-  })
-}
-
-export function useStopCamera() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (id: number) => {
-      await stopCamera(id)
-      return id
-    },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["cameras"] })
-    },
-  })
-}
-
-export function useViolations(
-  params?: Parameters<typeof getViolations>[0],
-  options?: { enabled?: boolean; refetchInterval?: number | false },
-) {
-  return useQuery({
-    queryKey: ["violations", params ?? {}],
+    queryKey: ["violations", params],
     queryFn: () => getViolations(params),
-    placeholderData: (prev) => prev,
-    enabled: options?.enabled ?? true,
-    refetchInterval: options?.refetchInterval ?? 10_000,
+    refetchInterval: 10_000,
   })
 }
-
-export function useResolveViolation() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: number) => resolveViolation(id),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["violations"] })
-    },
-  })
+export function useUsers() {
+  return useQuery({ queryKey: ["users"], queryFn: getUsers })
 }
-
-export function useExportViolations() {
-  return useMutation({
-    mutationFn: (params?: Parameters<typeof downloadViolationsCsv>[0]) =>
-      downloadViolationsCsv(params),
-  })
+export function useRefresh() {
+  const client = useQueryClient()
+  return async () => {
+    await Promise.all(
+      ["cameras", "sites", "dashboard", "violations", "users"].map((key) =>
+        client.invalidateQueries({ queryKey: [key] }),
+      ),
+    )
+  }
 }

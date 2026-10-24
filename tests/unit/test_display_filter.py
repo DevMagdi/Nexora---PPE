@@ -1,80 +1,47 @@
-"""
-اختبارات مزامنة العرض مع القواعد (rule-synced display).
-
-بث الكاميرا والأسطر الإحصائية لازم يعكسوا نفس الفئات اللي الكاميرا بتفحصها
-بالفعل: ``Person`` دايمًا (للسياق) + الفئات الموجبة/السالبة للمفاتيح المفعّلة
-— بما فيها الكشوف المولّدة من فلتر الجلد. أي فئة مش مفعّلة متظهرش حتى لو
-الموديل كشفها.
-"""
-
 from __future__ import annotations
+
+import pytest
 
 from app.camera.manager import CameraManager
 from app.core.detector import Detection
+from app.core.ppe import CANONICAL_CLASS_NAMES, sanitize_enabled_classes
 
 
-def det(
-    class_name: str,
-    box: tuple[int, int, int, int] = (0, 0, 10, 10),
-    confidence: float = 0.8,
-    source: str = "model",
-) -> Detection:
-    x1, y1, x2, y2 = box
-    return Detection(
-        class_id=0,
-        class_name=class_name,
-        confidence=confidence,
-        x1=x1,
-        y1=y1,
-        x2=x2,
-        y2=y2,
-        color=(255, 0, 0),
-        source=source,
-    )
-
-
-def test_construction_display_syncs_with_enabled_rules():
-    manager = CameraManager({})
-    detections = [
-        det("Person"),
-        det("Hardhat"),
-        det("NO-Hardhat"),
-        det("Safety Vest"),  # الفيست مش مفعّل على الكاميرا دي
-        det("NO-Mask"),
-        det("NO-Goggles", source="skin:eye_bridge"),  # كشف جلد لفئة مش مفعّلة
+def _detections():
+    return [
+        Detection(index, name, 0.9, 1, 1, 10, 10)
+        for index, name in enumerate(CANONICAL_CLASS_NAMES)
     ]
 
-    displayed = manager._filter_detections_for_display(
-        "construction", ["helmet", "mask"], detections
-    )
-    names = sorted(d.class_name for d in displayed)
 
-    assert names == ["Hardhat", "NO-Hardhat", "NO-Mask", "Person"]
-
-
-def test_medical_display_syncs_and_empty_rules_keep_only_person():
-    manager = CameraManager({})
-    detections = [
-        det("Person"),
-        det("Mask"),
-        det("NO-Mask"),
-        det("Head Cap"),
-        det("NO-Head Cap"),
-        det("Gloves"),  # الجوانتي مش مفعّل
-        det("NO-Goggles", source="skin:eye_bridge"),  # النظارة مش مفعّلة
-    ]
-
-    displayed = manager._filter_detections_for_display(
-        "medical", ["mask", "cap"], detections
-    )
-    assert {d.class_name for d in displayed} == {
+def test_display_uses_only_enabled_rules_and_person_context():
+    detections = _detections()
+    result = CameraManager._filter_detections_for_display(["helmet", "boots"], detections)
+    assert {d.class_name for d in result} == {
         "Person",
-        "Mask",
-        "NO-Mask",
-        "Head Cap",
-        "NO-Head Cap",
+        "Hardhat",
+        "NO-Hardhat",
+        "Safety Boots",
+        "NO-Boot",
     }
 
-    # من غير أي قواعد مفعّلة: الشخص بس هو اللي يظهر (سياق)
-    only_person = manager._filter_detections_for_display("medical", [], detections)
-    assert [d.class_name for d in only_person] == ["Person"]
+
+def test_counts_cover_all_and_only_industrial_classes():
+    counts = CameraManager._compute_counts(_detections())
+    assert counts["total"] == len(CANONICAL_CLASS_NAMES)
+    assert counts["person"] == 1
+    assert (
+        counts["no_hardhat"] == counts["no_vest"] == counts["no_boot"] == counts["no_goggles"] == 1
+    )
+    assert len(counts) == len(CANONICAL_CLASS_NAMES) + 1
+
+
+@pytest.mark.parametrize("value", [["unknown"], ["helmet", "unknown"], [], "helmet", [None]])
+def test_out_of_scope_rules_are_rejected_not_silently_enabled(value):
+    with pytest.raises(ValueError):
+        sanitize_enabled_classes(value)
+
+
+def test_default_and_deduplicated_rules():
+    assert sanitize_enabled_classes(None) == ["helmet", "vest"]
+    assert sanitize_enabled_classes(["helmet", "helmet"]) == ["helmet"]

@@ -39,7 +39,9 @@ class EmailHandler(AlertHandler):
 
     async def send(self, violation: ViolationEvent) -> bool:
         if not settings.SENDER_EMAIL or not settings.RECEIVER_EMAIL or not settings.EMAIL_PASSWORD:
-            logger.warning("Email not configured (sender/receiver/password missing), skipping alert")
+            logger.warning(
+                "Email not configured (sender/receiver/password missing), skipping alert"
+            )
             return False
 
         message = MIMEMultipart()

@@ -4,6 +4,7 @@ Revision ID: 20261012sec
 Revises: bec6d3a1cd21
 Create Date: 2026-10-12
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -35,7 +36,9 @@ def upgrade() -> None:
             options = {"nullable": default is None}
             if default is not None:
                 options["nullable"] = False
-                options["server_default"] = default if not isinstance(default, str) else sa.text(default)
+                options["server_default"] = (
+                    default if not isinstance(default, str) else sa.text(default)
+                )
             op.add_column("users", sa.Column(name, column_type, **options))
 
     # The old app had no roles. Preserve its all-operator capabilities for the
@@ -68,7 +71,9 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(), nullable=False),
         )
         op.create_index("ix_audit_logs_id", "audit_logs", ["id"], unique=False)
-        op.create_index("ix_audit_logs_actor_user_id", "audit_logs", ["actor_user_id"], unique=False)
+        op.create_index(
+            "ix_audit_logs_actor_user_id", "audit_logs", ["actor_user_id"], unique=False
+        )
         op.create_index("ix_audit_logs_action", "audit_logs", ["action"], unique=False)
         op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"], unique=False)
 

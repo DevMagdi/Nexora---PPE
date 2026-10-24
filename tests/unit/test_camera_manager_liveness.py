@@ -35,7 +35,7 @@ class FakeDetector:
 
 
 def manager_with_source(monkeypatch, source: FakeSource) -> CameraManager:
-    manager = CameraManager({"construction": FakeDetector()})
+    manager = CameraManager(FakeDetector())
     monkeypatch.setattr(manager, "_build_source", lambda *_args: source)
     return manager
 
@@ -44,7 +44,7 @@ async def test_start_camera_waits_until_first_processed_frame(monkeypatch):
     source = FakeSource(frame=np.zeros((32, 48, 3), dtype=np.uint8))
     manager = manager_with_source(monkeypatch, source)
 
-    started = await manager.start_camera(1, "construction", "webcam", "0")
+    started = await manager.start_camera(1, "rtsp", "rtsp://192.168.10.20/live")
 
     assert started is True
     assert manager.is_running(1) is True
@@ -65,8 +65,27 @@ async def test_start_camera_fails_clearly_and_releases_source_without_frames(mon
     monkeypatch.setattr(settings, "FRAME_READ_RETRY_DELAY_SECONDS", 0.001)
 
     with pytest.raises(ValueError, match="no video frame arrived"):
-        await manager.start_camera(2, "construction", "webcam", "0")
+        await manager.start_camera(2, "rtsp", "rtsp://192.168.10.20/live")
 
     assert source.released is True
     assert 2 not in manager._entries
     assert manager.is_running(2) is False
+
+
+async def test_cancelled_start_releases_a_source_that_has_not_been_registered(monkeypatch):
+    entered = asyncio.Event()
+
+    class SlowOpeningSource(FakeSource):
+        async def connect(self):
+            entered.set()
+            await asyncio.Event().wait()
+
+    source = SlowOpeningSource(frame=None)
+    manager = manager_with_source(monkeypatch, source)
+    opening = asyncio.create_task(manager.start_camera(7, "rtsp", "rtsp://192.168.10.20/live"))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+    assert source.released
+    assert not manager._entries

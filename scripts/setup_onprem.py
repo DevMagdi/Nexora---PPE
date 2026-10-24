@@ -36,9 +36,13 @@ def _valid_host(host: str) -> str:
     if (
         not value
         or len(value) > 253
-        or any(not label or len(label) > 63 or not HOST_LABEL_RE.fullmatch(label) for label in labels)
+        or any(
+            not label or len(label) > 63 or not HOST_LABEL_RE.fullmatch(label) for label in labels
+        )
     ):
-        raise ValueError("--host must be a valid DNS name or IPv4 address without a scheme, port, or path")
+        raise ValueError(
+            "--host must be a valid DNS name or IPv4 address without a scheme, port, or path"
+        )
     return value
 
 
@@ -49,16 +53,22 @@ def _valid_https_bind_address(address: str) -> str:
         raise ValueError("--https-bind-address must be an IPv4 address") from exc
 
 
-def _valid_docker_subnets(edge_subnet: str, data_subnet: str) -> tuple[ipaddress.IPv4Network, ipaddress.IPv4Network]:
+def _valid_docker_subnets(
+    edge_subnet: str, data_subnet: str
+) -> tuple[ipaddress.IPv4Network, ipaddress.IPv4Network]:
     try:
         edge = ipaddress.ip_network(edge_subnet, strict=True)
         data = ipaddress.ip_network(data_subnet, strict=True)
     except ValueError as exc:
-        raise ValueError("Docker network subnets must be valid IPv4 CIDRs with aligned network addresses") from exc
+        raise ValueError(
+            "Docker network subnets must be valid IPv4 CIDRs with aligned network addresses"
+        ) from exc
     if not isinstance(edge, ipaddress.IPv4Network) or not isinstance(data, ipaddress.IPv4Network):
         raise ValueError("Docker network subnets must use IPv4")
     if not edge.is_private or not data.is_private or edge.prefixlen > 29 or data.prefixlen > 29:
-        raise ValueError("Docker network subnets must be private IPv4 CIDRs with room for service addresses")
+        raise ValueError(
+            "Docker network subnets must be private IPv4 CIDRs with room for service addresses"
+        )
     if edge.overlaps(data):
         raise ValueError("The isolated edge and data Docker subnets must not overlap")
     return edge, data
@@ -77,7 +87,7 @@ def _valid_prefixes(values: list[str]) -> list[str]:
             raise ValueError(f"Invalid camera network prefix: {item!r}") from exc
         if (
             "*" in value
-            or parsed.scheme not in {"rtsp", "rtsps", "http", "https"}
+            or parsed.scheme not in {"rtsp", "rtsps"}
             or not parsed.hostname
             or parsed.username
             or parsed.password
@@ -122,7 +132,9 @@ def setup(
     https_bind_address = _valid_https_bind_address(https_bind_address)
     edge_network, data_network = _valid_docker_subnets(edge_subnet, data_subnet)
     if ENV_FILE.exists():
-        raise FileExistsError(".env already exists; back it up and remove it only if you intend to rotate all generated secrets")
+        raise FileExistsError(
+            ".env already exists; back it up and remove it only if you intend to rotate all generated secrets"
+        )
     if not ENV_EXAMPLE.is_file():
         raise FileNotFoundError(".env.example is missing")
 
@@ -145,9 +157,9 @@ def setup(
         "MEDIA_TOKEN_EXPIRE_MINUTES": "10",
         "BOOTSTRAP_USERNAME": "admin",
         "BOOTSTRAP_PASSWORD": _password(),
-        "BOOTSTRAP_SECTOR": "both",
         "ALLOWED_RTSP_PREFIXES": ",".join(prefixes),
         "ALLOWED_VIDEO_DIR": "/var/nexora/videos",
+        "UPLOADS_DIR": "/var/nexora/videos/uploads",
         "BACKUP_ENCRYPTION_KEY": secrets.token_urlsafe(32),
         "BACKUP_DIR": "/var/nexora/backups",
         "POSTGRES_USER": "nexora",
@@ -177,12 +189,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Create a production .env for one isolated Nexora on-prem installation."
     )
-    parser.add_argument("--host", required=True, help="DNS name used by Caddy, e.g. nexora.site.lan")
+    parser.add_argument(
+        "--host", required=True, help="DNS name used by Caddy, e.g. nexora.site.lan"
+    )
     parser.add_argument(
         "--rtsp-prefix",
         action="append",
         required=True,
-        help="Exact RTSP/HTTP camera origin or host prefix; repeat for each trusted camera network",
+        help="Exact RTSP camera origin or host prefix; repeat for each trusted camera network",
     )
     parser.add_argument(
         "--https-bind-address",
@@ -215,9 +229,13 @@ def main() -> int:
     print(f"Created {ENV_FILE} with mode 0600")
     print("Initial administrator username: admin")
     print(f"Initial temporary password (shown once): {initial_password}")
-    print("The admin must change this password on first sign-in. Deliver credentials privately after payment.")
-    print("Trust the Caddy internal CA on approved client devices; do not expose the database or app port directly.")
-    print("Review .env and replace sample RTSP prefixes with only the customer's camera VLANs before starting.")
+    print("The admin must change this password on first sign-in. Deliver credentials privately.")
+    print(
+        "Trust the Caddy internal CA on approved client devices; do not expose the database or app port directly."
+    )
+    print(
+        "Review .env and replace sample RTSP prefixes with only the customer's camera VLANs before starting."
+    )
     print("Keep the generated backup key and .env backup in separate, access-controlled storage.")
     print("Start the stack with: docker compose up --build -d")
     return 0

@@ -42,12 +42,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """
-    ⚠️ ملاحظة مهمة: create_all() بتنشئ الجداول الناقصة بس، ومش بتعدّل
-    جداول موجودة بالفعل (مثلاً لو ضفت عمود جديد لـ Camera، مش هيتضاف
-    لملف .db موجود من قبل). لو هتضيف جداول/أعمدة جديدة (Users، Organizations..)
-    على قاعدة بيانات فيها بيانات حقيقية بالفعل، لازم تستخدم Alembic
-    للـ migrations بدل الاعتماد على create_all وحدها.
+    """Verify tables after Alembic has applied versioned schema migrations.
+
+    create_all creates absent tables only; it never upgrades an existing schema.
+    Production startup must run upgrade_database before this helper.
     """
     from app.db.models import Base
 

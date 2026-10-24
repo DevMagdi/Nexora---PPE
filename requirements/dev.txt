@@ -1,6 +1,2 @@
 -r base.txt
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-pytest-cov>=5.0.0
-anyio>=4.0.0
-ruff>=0.4.0
+-r test.txt

@@ -249,9 +249,7 @@ def run_probe(entries: list[dict[str, str]], timeout: int) -> tuple[list[dict], 
 
 
 def collect(quick: bool, timeout: int) -> list[Result]:
-    selected = [
-        probe for probe in PROBES if not (quick and probe.module in HEAVY_MODULES)
-    ]
+    selected = [probe for probe in PROBES if not (quick and probe.module in HEAVY_MODULES)]
     entries = [{"module": p.module, "distribution": p.distribution} for p in selected]
 
     results: list[Result] = []
@@ -289,9 +287,7 @@ def collect(quick: bool, timeout: int) -> list[Result]:
             if records:
                 results.append(classify(probe, records[0]))
             else:
-                results.append(
-                    Result(probe, "crashed", detail=stderr_tail or "probe process died")
-                )
+                results.append(Result(probe, "crashed", detail=stderr_tail or "probe process died"))
 
     order = {probe.module: index for index, probe in enumerate(selected)}
     results.sort(key=lambda item: order.get(item.probe.module, len(order)))
@@ -413,7 +409,9 @@ def print_verdict(
     automatic = [item for item in blocked if item.probe.fallback]
     hard = [item for item in blocked if not item.probe.fallback]
     for item in automatic + hard:
-        suffix = "Nexora works around this" if item.probe.fallback else "no fallback - must be fixed"
+        suffix = (
+            "Nexora works around this" if item.probe.fallback else "no fallback - must be fixed"
+        )
         print(f"{item.label}: {item.probe.module} ({suffix})")
         print(f"  {item.detail}")
         if item.probe.note:
@@ -533,11 +531,7 @@ def main() -> int:
             for item in results
             if item.status in {"error", "crashed"}
             or (item.status == "missing" and item.probe.required)
-            or (
-                item.status == "blocked"
-                and not item.caused_by
-                and not item.probe.fallback
-            )
+            or (item.status == "blocked" and not item.caused_by and not item.probe.fallback)
         ]
         return 1 if unresolved else 0
 

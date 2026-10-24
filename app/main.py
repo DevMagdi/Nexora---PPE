@@ -68,6 +68,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             settings.BOOTSTRAP_PASSWORD,
         )
 
+    from app.core.detector import PPEDetector
+
+    logger.info("Loading the approved industrial PPE checkpoint...")
+    # Fail closed if the exact artifact is absent or its class contract is invalid.
+    app.state.detector = await asyncio.to_thread(PPEDetector)
+
     os.makedirs(settings.FRAMES_DIR, exist_ok=True)
 
     # Fail closed: schema updates are versioned and applied before the app starts.
@@ -75,14 +81,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         await upgrade_database()
     except Exception:
-        logger.exception("Database migration failed; API startup is stopping before camera initialization.")
+        logger.exception(
+            "Database migration failed; API startup is stopping before camera initialization."
+        )
         raise
     logger.info("Database migrations applied")
     logger.info("Verifying application database connection and schema...")
     try:
         await init_db()
     except Exception:
-        logger.exception("Database schema verification failed after Alembic; API startup is stopping.")
+        logger.exception(
+            "Database schema verification failed after Alembic; API startup is stopping."
+        )
         raise
     logger.info("Database schema is up to date")
 
@@ -92,7 +102,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await ensure_bootstrap_user(
         username=settings.BOOTSTRAP_USERNAME,
         password=settings.BOOTSTRAP_PASSWORD,
-        sector=settings.BOOTSTRAP_SECTOR,
     )
     logger.info("Bootstrap user check complete")
 
@@ -104,54 +113,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "(dev docs at /docs, dashboard via `npm run dev` in frontend/)"
         )
 
-    from app.core.detector import PPEDetector
-    from app.core.hybrid_detector import HybridPPEDetector
-
-    logger.info("Loading detection models (first run can take a while)...")
-    construction_detector = PPEDetector(
-        settings.CONSTRUCTION_MODEL_PATH,
-        settings.CONSTRUCTION_DETECTION_CONFIDENCE,
-        settings.CONSTRUCTION_DEFAULT_CLASS_CONF,
-        settings.CONSTRUCTION_CLASS_CONF_THRESHOLDS,
-        fallbacks=("Model/ppe.pt", "Model/ppe_construction.pt"),
-        setting_name="CONSTRUCTION_MODEL_PATH",
-    )
-    medical_detector = PPEDetector(
-        settings.MEDICAL_MODEL_PATH,
-        settings.MEDICAL_DETECTION_CONFIDENCE,
-        settings.MEDICAL_DEFAULT_CLASS_CONF,
-        settings.MEDICAL_CLASS_CONF_THRESHOLDS,
-        fallbacks=("Model/bestMedicalModel_FINAL.pt", "Model/ppe_medical.pt"),
-        setting_name="MEDICAL_MODEL_PATH",
-    )
-
-    if settings.HYBRID_DETECTION_ENABLED:
-        app.state.detectors = {
-            "construction": HybridPPEDetector(
-                construction_detector,
-                medical_detector,
-                primary_profile="construction",
-            ),
-            "medical": HybridPPEDetector(
-                construction_detector,
-                medical_detector,
-                primary_profile="medical",
-            ),
-        }
-        app.state.hybrid_enabled = True
-        logger.info("Hybrid detectors loaded (medical + construction + skin heuristics)")
-    else:
-        app.state.detectors = {
-            "construction": construction_detector,
-            "medical": medical_detector,
-        }
-        app.state.hybrid_enabled = False
-        logger.info("Detectors loaded (construction + medical), hybrid mode disabled")
-
     from app.camera.manager import CameraManager
 
     logger.info("Starting camera manager...")
-    app.state.camera_manager = CameraManager(app.state.detectors)
+    app.state.camera_manager = CameraManager(app.state.detector)
     await app.state.camera_manager.start()
     logger.info("Camera manager started — API is ready")
 
@@ -164,15 +129,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Nexora PPE Detection API (Multi-Model)",
-        description="Construction + Medical PPE compliance monitoring",
-        version="3.1.0",
+        title="Nexora Industrial PPE API",
+        description="Industrial safety monitoring for factories, construction sites, workshops and warehouses",
+        version="4.0.0",
         lifespan=lifespan,
         docs_url=None if settings.APP_ENV == "prod" else "/docs",
         redoc_url=None if settings.APP_ENV == "prod" else "/redoc",
         openapi_url=None if settings.APP_ENV == "prod" else "/openapi.json",
     )
 
+    app.state.inference_slots = asyncio.Semaphore(2)
     app.state.login_rate_limiter = None
     from app.core.rate_limit import SlidingWindowRateLimiter
 
@@ -181,6 +147,9 @@ def create_app() -> FastAPI:
         settings.LOGIN_RATE_WINDOW_SECONDS,
     )
 
+    from app.api.upload_limit import UploadLimitMiddleware
+
+    app.add_middleware(UploadLimitMiddleware)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=settings.allowed_hosts,
@@ -199,7 +168,8 @@ def create_app() -> FastAPI:
         if (
             settings.APP_ENV == "prod"
             and request.url.scheme != "https"
-            and request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() != "https"
+            and request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+            != "https"
         ):
             return JSONResponse(status_code=400, content={"detail": "HTTPS is required"})
 
@@ -214,7 +184,8 @@ def create_app() -> FastAPI:
 
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        if settings.APP_ENV != "dev":
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if settings.APP_ENV != "dev":
@@ -240,6 +211,12 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    from app.api.routes.dashboard import router as dashboard_router
+    from app.api.routes.inference import router as inference_router
+    from app.api.routes.sites import router as sites_router
+
+    for router in (dashboard_router, inference_router, sites_router):
+        app.include_router(router, prefix="/api/v1")
     from app.api.routes.auth import router as auth_router
     from app.api.routes.cameras import router as cameras_router
     from app.api.routes.health import router as health_router
@@ -270,8 +247,6 @@ def create_app() -> FastAPI:
         camera = await db.get(Camera, int(match.group(1)))
         if camera is None:
             raise HTTPException(status_code=404, detail="Frame not found")
-        if user.sector != "both" and camera.profile != user.sector:
-            raise HTTPException(status_code=403, detail="Forbidden")
 
         base_dir = Path(settings.FRAMES_DIR).resolve()
         try:

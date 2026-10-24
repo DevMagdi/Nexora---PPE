@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from app.core.detector import Detection, is_skin_source
+from app.core.detector import Detection
 
 
 def draw_text_with_background(
@@ -13,7 +13,7 @@ def draw_text_with_background(
     font_scale: float = 0.4,
     color: tuple[int, int, int] = (255, 255, 255),
     thickness: int = 1,
-    bg_color: tuple[int, int, int] = (0, 0, 0),
+    bg_color: tuple[int, int, int] = (43, 27, 17),
     alpha: float = 0.7,
     padding: int = 5,
 ) -> None:
@@ -45,9 +45,6 @@ def annotate_frame(
     for det in detections:
         cv2.rectangle(annotated, (det.x1, det.y1), (det.x2, det.y2), det.color, 2)
         label = f"{det.class_name} ({det.confidence:.2f})"
-        if is_skin_source(getattr(det, "source", None)):
-            # كشف مؤكَّد/مولَّد من فلتر الجلد أو جسر العينين
-            label = f"{label} [skin]"
 
         draw_text_with_background(
             annotated,
@@ -67,7 +64,7 @@ def annotate_frame(
             (10, 30 + i * 28),
             font_scale=0.5,
             color=(255, 255, 255),
-            bg_color=(0, 0, 0),
+            bg_color=(43, 27, 17),
             alpha=0.7,
             padding=5,
         )
@@ -78,8 +75,8 @@ def annotate_frame(
             "Alert Sent",
             (annotated.shape[1] - 110, 30),
             font_scale=0.5,
-            color=(0, 255, 0),
-            bg_color=(0, 0, 0),
+            color=(148, 179, 126),
+            bg_color=(43, 27, 17),
             alpha=0.8,
             padding=5,
         )

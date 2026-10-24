@@ -80,7 +80,9 @@ async def test_alembic_upgrade_applies_the_full_schema_to_sqlite(tmp_path, monke
         user_columns = {column["name"] for column in inspector.get_columns("users")}
         assert {"role", "is_active", "must_change_password", "token_version"}.issubset(user_columns)
         with engine.connect() as connection:
-            revision = connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "20261012sec"
+            revision = connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+        assert revision == "20261024ind"
     finally:
         engine.dispose()

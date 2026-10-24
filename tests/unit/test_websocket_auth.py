@@ -116,8 +116,8 @@ async def test_active_media_session_detects_revocation_and_deactivation(monkeypa
 
 @pytest.mark.parametrize("token", ["", "not-a-jwt"])
 async def test_websocket_rejects_missing_or_invalid_media_cookie_before_accept(monkeypatch, token):
-    user = SimpleNamespace(id=1, sector="both", is_active=True, must_change_password=False, token_version=0)
-    camera = SimpleNamespace(id=5, profile="construction")
+    user = SimpleNamespace(id=1, is_active=True, must_change_password=False, token_version=0)
+    camera = SimpleNamespace(id=5)
     events = []
     manager = FakeManager(events, [True])
     fake_db = FakeDB(user, camera, events)
@@ -143,8 +143,8 @@ async def test_websocket_rejects_cross_origin_before_authentication():
 
 
 async def test_websocket_accepts_same_origin_dashboard_served_by_backend(monkeypatch):
-    user = SimpleNamespace(id=1, sector="both", is_active=True, must_change_password=False, token_version=0)
-    camera = SimpleNamespace(id=5, profile="construction")
+    user = SimpleNamespace(id=1, is_active=True, must_change_password=False, token_version=0)
+    camera = SimpleNamespace(id=5)
     events = []
     manager = FakeManager(events, [True, False])
     monkeypatch.setattr(stream, "AsyncSessionLocal", lambda: FakeDB(user, camera, events))
@@ -164,35 +164,31 @@ async def test_websocket_accepts_same_origin_dashboard_served_by_backend(monkeyp
     assert "manager:unsubscribe" in events
 
 
-async def test_websocket_validates_user_sector_and_camera_before_accept(monkeypatch):
-    user = SimpleNamespace(id=1, sector="medical", is_active=True, must_change_password=False, token_version=0)
-    camera = SimpleNamespace(id=5, profile="construction")
+async def test_websocket_rejects_disabled_user_before_accept(monkeypatch):
+    user = SimpleNamespace(id=1, is_active=False, must_change_password=False, token_version=0)
+    camera = SimpleNamespace(id=5)
     events = []
     manager = FakeManager(events, [True])
     fake_db = FakeDB(user, camera, events)
     monkeypatch.setattr(stream, "AsyncSessionLocal", lambda: fake_db)
     token = create_access_token("1", token_type="media", token_version=0)
-    socket = FakeWebSocket(
-        cookies={media_cookie_name(): token}, events=events, manager=manager
-    )
+    socket = FakeWebSocket(cookies={media_cookie_name(): token}, events=events, manager=manager)
 
     await stream.websocket_stream(socket, 5)
     assert socket.accepted is False
-    assert socket.close_events[0][1] == "Forbidden"
+    assert socket.close_events[0][1] == "Invalid session or camera"
     assert "manager:is_running" not in events
 
 
 async def test_websocket_accepts_only_after_all_auth_checks(monkeypatch):
-    user = SimpleNamespace(id=1, sector="both", is_active=True, must_change_password=False, token_version=0)
-    camera = SimpleNamespace(id=5, profile="construction")
+    user = SimpleNamespace(id=1, is_active=True, must_change_password=False, token_version=0)
+    camera = SimpleNamespace(id=5)
     events = []
     manager = FakeManager(events, [True, False])
     fake_db = FakeDB(user, camera, events)
     monkeypatch.setattr(stream, "AsyncSessionLocal", lambda: fake_db)
     token = create_access_token("1", token_type="media", token_version=0)
-    socket = FakeWebSocket(
-        cookies={media_cookie_name(): token}, events=events, manager=manager
-    )
+    socket = FakeWebSocket(cookies={media_cookie_name(): token}, events=events, manager=manager)
 
     await stream.websocket_stream(socket, 5)
     assert socket.accepted is True
@@ -202,8 +198,8 @@ async def test_websocket_accepts_only_after_all_auth_checks(monkeypatch):
 
 
 async def test_active_websocket_closes_after_session_revocation(monkeypatch):
-    user = SimpleNamespace(id=1, sector="both", is_active=True, must_change_password=False, token_version=0)
-    camera = SimpleNamespace(id=5, profile="construction")
+    user = SimpleNamespace(id=1, is_active=True, must_change_password=False, token_version=0)
+    camera = SimpleNamespace(id=5)
     events = []
     manager = FakeManager(events, [True, True])
     fake_db = FakeDB(user, camera, events)

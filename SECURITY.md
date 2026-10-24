@@ -1,24 +1,11 @@
-# Security Policy
+# Nexora PPE security policy
 
-We take the security of our project seriously. If you find a security vulnerability, please follow the steps below to report it.
+This is an on-prem industrial monitoring application, not a substitute for site safety procedures. Deploy behind the site's HTTPS proxy and network controls. See [deployment guidance](docs/ON_PREM_SECURITY_AR.md).
 
-## Reporting a Vulnerability
+Report vulnerabilities privately to the repository maintainers through an established private contact channel or GitHub private vulnerability reporting when enabled. Do not publish working credentials, tokens, camera URLs, databases or identifying worker evidence in public issues. No response-time guarantee is implied.
 
-If you discover a security vulnerability, please report it by emailing the project maintainers directly at [ansmajidali@gmail.com]. Include the following information:
-- A detailed description of the vulnerability.
-- Steps to reproduce the issue.
-- Any relevant logs, screenshots, or error messages.
-- A suggested fix (if possible).
+Include the affected revision, a minimal reproduction using synthetic data, impact, environment and relevant redacted logs. Do not upload checkpoint files or attempt to access another installation.
 
-## Security Updates
+Before any pilot, supply and verify the approved `ppe_unified_best.pt`, use unique strong secrets, pin its SHA-256, test role restrictions and session revocation, and validate backup restoration. A missing or incompatible approved checkpoint must remain a startup failure; never bypass it with another model or fake inference.
 
-We will acknowledge receipt of the report within 24 hours and provide a timeline for resolution. Security issues will be prioritized based on severity.
-
-## Handling Security Vulnerabilities
-
-After a vulnerability is reported, we will:
-- Assess the risk and impact of the issue.
-- Work on a patch or fix and deploy it as soon as possible.
-- Release a security update and provide details about the vulnerability in the release notes.
-
-Thank you for helping us keep the project secure!
+Application and browser test success does not establish detector accuracy, physical safety, container deployment readiness or camera-network security. Record actual deployment validation separately.

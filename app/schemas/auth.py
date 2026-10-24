@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.password_policy import validate_password
+
+UserRole = Literal["admin", "supervisor", "viewer"]
 
 
 class LoginResponse(BaseModel):
@@ -16,8 +18,7 @@ class LoginResponse(BaseModel):
 class MeResponse(BaseModel):
     id: int
     username: str
-    sector: str
-    role: str
+    role: UserRole
     must_change_password: bool
 
 
@@ -33,29 +34,26 @@ class PasswordChangeRequest(BaseModel):
 
 
 class UserCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=3, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
-    sector: Literal["construction", "medical", "both"]
-    # Site administrators may issue viewer/operator accounts. Admin accounts are
-    # deliberately reserved for the on-prem operator/CLI bootstrap process.
-    role: Literal["operator", "viewer"] = "viewer"
+    # Provisioning additional administrators is reserved for the local CLI.
+    role: Literal["supervisor", "viewer"] = "viewer"
 
 
 class UserUpdateRequest(BaseModel):
-    sector: Literal["construction", "medical", "both"] | None = None
-    role: Literal["operator", "viewer"] | None = None
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["supervisor", "viewer"] | None = None
     is_active: bool | None = None
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
-    sector: str
-    role: str
+    role: UserRole
     is_active: bool
     must_change_password: bool
     created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 class UserIssuedResponse(UserResponse):

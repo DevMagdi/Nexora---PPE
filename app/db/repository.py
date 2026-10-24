@@ -63,7 +63,7 @@ async def get_user_by_username(username: str):
         return res.scalar_one_or_none()
 
 
-async def ensure_bootstrap_user(username: str, password: str, sector: str) -> None:
+async def ensure_bootstrap_user(username: str, password: str) -> None:
     """ينشئ user واحد عند أول تشغيل لو جدول users فاضي."""
     from app.db.models import User
     from app.db.session import AsyncSessionLocal
@@ -77,7 +77,6 @@ async def ensure_bootstrap_user(username: str, password: str, sector: str) -> No
         u = User(
             username=username,
             password_hash=hash_password(password),
-            sector=sector,
             role="admin",
             is_active=True,
             must_change_password=True,
@@ -85,7 +84,6 @@ async def ensure_bootstrap_user(username: str, password: str, sector: str) -> No
         session.add(u)
         await session.commit()
         logger.warning(
-            "Bootstrap user created: username=%s sector=%s (CHANGE PASSWORD!)",
+            "Bootstrap industrial admin created: username=%s (CHANGE PASSWORD!)",
             username,
-            sector,
         )

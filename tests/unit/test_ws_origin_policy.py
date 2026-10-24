@@ -30,7 +30,7 @@ ALLOWED_CASES = [
     # أصول Vite المصرّح بيها صراحةً في CORS_ORIGINS
     ("http://localhost:5173", "localhost:8000"),
     ("http://127.0.0.1:5173", "127.0.0.1:8000"),
-    # تطبيع الحالة والميل تريلينج سلاش
+    # توحيد الحالة والميل تريلينج سلاش
     ("HTTP://LocalHost:8000/", "LOCALHOST:8000"),
     # البورت الافتراضي المختفي لسه نفس الهوست
     ("http://localhost", "localhost:8000"),
@@ -75,7 +75,9 @@ def test_rejected_origins(origin: str, host: str) -> None:
 
 
 @pytest.mark.parametrize(("origin", "host", "expected"), NO_HOST_HEADER_CASES)
-def test_missing_host_header_falls_back_to_cors_list(origin: str, host: str | None, expected: bool) -> None:
+def test_missing_host_header_falls_back_to_cors_list(
+    origin: str, host: str | None, expected: bool
+) -> None:
     websocket = make_websocket(origin, host)
     assert stream._websocket_origin_is_allowed(websocket, origin) is expected
 

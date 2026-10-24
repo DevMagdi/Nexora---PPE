@@ -22,12 +22,12 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: proxyTarget,
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
       },
       "/frames": {
         target: proxyTarget,
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },

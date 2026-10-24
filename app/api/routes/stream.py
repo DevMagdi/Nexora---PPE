@@ -142,8 +142,6 @@ async def mjpeg_stream(
     cam = await db.get(Camera, camera_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    if user.sector != "both" and cam.profile != user.sector:
-        raise HTTPException(status_code=404, detail="Camera not found")
 
     manager: CameraManager = get_camera_manager(request)
     if not manager.is_running(camera_id):
@@ -167,7 +165,8 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
     if (
         settings.APP_ENV == "prod"
         and websocket.url.scheme != "wss"
-        and websocket.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() != "https"
+        and websocket.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+        != "https"
     ):
         logger.warning("Rejected insecure WebSocket for camera_id=%s in production", camera_id)
         await websocket.close(code=1008, reason="Secure WebSocket required")
@@ -190,7 +189,9 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
     try:
         payload = decode_token_payload(token, expected_type="media")
     except HTTPException:
-        logger.warning("Rejected WebSocket for camera_id=%s: missing or invalid media session", camera_id)
+        logger.warning(
+            "Rejected WebSocket for camera_id=%s: missing or invalid media session", camera_id
+        )
         await websocket.close(code=1008, reason="Invalid or missing media session")
         return
 
@@ -204,12 +205,10 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
             or user.token_version != int(payload.get("ver", 0))
             or cam is None
         ):
-            logger.warning("Rejected WebSocket for camera_id=%s: invalid session or camera", camera_id)
+            logger.warning(
+                "Rejected WebSocket for camera_id=%s: invalid session or camera", camera_id
+            )
             await websocket.close(code=1008, reason="Invalid session or camera")
-            return
-        if user.sector != "both" and cam.profile != user.sector:
-            logger.warning("Rejected WebSocket for camera_id=%s: sector access denied", camera_id)
-            await websocket.close(code=1008, reason="Forbidden")
             return
 
     manager: CameraManager = websocket.app.state.camera_manager
@@ -221,7 +220,7 @@ async def websocket_stream(websocket: WebSocket, camera_id: int):
     media_expires_at = datetime.fromtimestamp(float(payload["exp"]), UTC)
     token_version = int(payload.get("ver", 0))
     last_session_check = time.monotonic()
-    # Authentication, activity, token version, camera existence, sector, and
+    # Authentication, activity, token version, camera existence, and
     # camera state are checked before the WebSocket handshake is accepted.
     await websocket.accept()
     logger.info("WebSocket connected to live camera stream (camera_id=%s)", camera_id)

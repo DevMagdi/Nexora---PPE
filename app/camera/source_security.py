@@ -7,8 +7,8 @@ from urllib.parse import parse_qsl, urlsplit
 
 from app.core.config import settings
 
-_NETWORK_SCHEMES = {"rtsp", "rtsps", "http", "https"}
-_DEFAULT_PORTS = {"rtsp": 554, "rtsps": 322, "http": 80, "https": 443}
+_NETWORK_SCHEMES = {"rtsp", "rtsps"}
+_DEFAULT_PORTS = {"rtsp": 554, "rtsps": 322}
 _BLOCKED_HOSTS = {"localhost", "localhost.localdomain", "metadata.google.internal"}
 
 
@@ -21,7 +21,9 @@ def _host_matches_prefix(host: str, allowed_host: str) -> bool:
                 candidate = ipaddress.ip_address(host)
             except ValueError:
                 return False
-            return candidate.version == 4 and str(candidate).split(".")[: len(prefix.split("."))] == prefix.split(".")
+            return candidate.version == 4 and str(candidate).split(".")[
+                : len(prefix.split("."))
+            ] == prefix.split(".")
         return host.startswith(allowed_host)
     return host == allowed_host.rstrip(".")
 
@@ -32,7 +34,7 @@ def validate_rtsp_uri(uri: str) -> None:
     scheme = parsed.scheme.lower()
     host = (parsed.hostname or "").rstrip(".").lower()
     if scheme not in _NETWORK_SCHEMES or not host:
-        raise ValueError("Network camera URI must use rtsp, rtsps, http, or https with a hostname")
+        raise ValueError("Network camera URI must use rtsp or rtsps with a hostname")
     if parsed.port is not None and not 1 <= parsed.port <= 65535:
         raise ValueError("Invalid camera port")
     if parsed.query and any(
@@ -46,12 +48,21 @@ def validate_rtsp_uri(uri: str) -> None:
         address = ipaddress.ip_address(host)
     except ValueError:
         address = None
-    if address and (address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified):
-        raise ValueError("Loopback, link-local, multicast, and unspecified camera addresses are forbidden")
+    if address and (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        raise ValueError(
+            "Loopback, link-local, multicast, and unspecified camera addresses are forbidden"
+        )
 
     allowed = settings.rtsp_prefixes
     if not allowed:
-        raise ValueError("Network camera sources are disabled: configure ALLOWED_RTSP_PREFIXES first")
+        raise ValueError(
+            "Network camera sources are disabled: configure ALLOWED_RTSP_PREFIXES first"
+        )
 
     for prefix in allowed:
         allow = urlsplit(prefix)
@@ -97,14 +108,6 @@ def validate_file_uri(uri: str) -> str:
 
 
 def validate_camera_source(source_type: str, source_uri: str) -> str:
-    if source_type == "webcam":
-        try:
-            index = int(source_uri)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("webcam source_uri must be an integer index like '0' or '1'") from exc
-        if index < 0:
-            raise ValueError("Webcam index must be a non-negative integer")
-        return str(index)
     if source_type == "rtsp":
         validate_rtsp_uri(source_uri)
         return source_uri.strip()

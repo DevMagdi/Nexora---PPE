@@ -102,9 +102,13 @@ def decrypt_to_path(input_path: Path, output_path: Path, key: bytes) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Encrypt/decrypt on-prem PostgreSQL backups using AES-256-GCM")
+    parser = argparse.ArgumentParser(
+        description="Encrypt/decrypt on-prem PostgreSQL backups using AES-256-GCM"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
-    encrypt = commands.add_parser("encrypt", help="Encrypt a custom-format pg_dump received on stdin")
+    encrypt = commands.add_parser(
+        "encrypt", help="Encrypt a custom-format pg_dump received on stdin"
+    )
     encrypt.add_argument("--output", type=Path, required=True)
     decrypt = commands.add_parser("decrypt", help="Authenticate/decrypt an encrypted backup")
     decrypt.add_argument("--input", type=Path, required=True)
