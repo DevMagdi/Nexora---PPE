@@ -23,19 +23,18 @@ _SEPARATOR = re.compile(r"[\s_-]+")
 def class_key(name: str) -> str:
     return _SEPARATOR.sub(" ", str(name or "").strip().casefold())
 
-
 _ALIASES: dict[str, tuple[str, ...]] = {
-    "Person": ("worker", "people"),
-    "Hardhat": ("hard hat", "helmet", "safety helmet"),
-    "NO-Hardhat": ("no hard hat", "no helmet", "no safety helmet"),
-    "Safety Vest": ("vest", "safetyvest"),
-    "NO-Safety Vest": ("no vest", "no safetyvest"),
+    "Person": ("worker", "people", "person"),
+    "Hardhat": ("hard hat", "helmet", "safety helmet", "hardhat"),
+    "NO-Hardhat": ("no hard hat", "no helmet", "no safety helmet", "no_helmet", "no-helmet"),
+    "Safety Vest": ("vest", "safetyvest", "safety vest"),
+    "NO-Safety Vest": ("no vest", "no safetyvest", "no_vest", "no-vest", "no safety vest"),
     "Gloves": ("glove", "hand gloves", "hand glove", "safety gloves"),
-    "NO-Gloves": ("no glove", "no hand gloves", "no hand glove", "no safety gloves"),
-    "Safety Boots": ("boot", "boots", "safety boot", "safety shoes"),
-    "NO-Boot": ("no boots", "no safety boot", "no safety boots", "no safety shoes"),
+    "NO-Gloves": ("no glove", "no hand gloves", "no hand glove", "no safety gloves", "no_gloves", "no-gloves"),
+    "Safety Boots": ("boot", "boots", "safety boot", "safety boots", "safety shoes"),
+    "NO-Boot": ("no boot", "no boots", "no safety boot", "no safety boots", "no safety shoes", "no_boot", "no-boots", "no_boots"),
     "Goggles": ("goggle", "safety glasses", "eye protection"),
-    "NO-Goggles": ("no goggle", "no safety glasses", "no eye protection"),
+    "NO-Goggles": ("no goggle", "no safety glasses", "no eye protection", "no_goggles", "no-goggles"),
 }
 CANONICAL_BY_KEY = {
     class_key(alias): canonical
