@@ -61,7 +61,7 @@ export default function UploadsPage({
     setFile(file)
   }
   return (
-    <div className="grid items-start gap-6 lg:grid-cols-[380px_1fr]">
+    <div className="grid items-start gap-7 lg:grid-cols-[390px_1fr]">
       <section className="panel p-6">
         <div className="segmented mb-6">
           <button

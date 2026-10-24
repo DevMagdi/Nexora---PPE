@@ -115,7 +115,7 @@ export default function SitesPage({
           />
         </div>
       ) : (
-        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-7 sm:grid-cols-2 xl:grid-cols-3">
           {sites.map((site) => (
             <article key={site.id} className="panel p-6">
               <div className="mb-5 flex items-center justify-between">

@@ -144,15 +144,30 @@ test("softer cards, logical active indicator and forms preserve RTL and avoid an
   await mockApi(page)
   await openForm(page)
   const styles = await page.evaluate(() => {
-    const card = getComputedStyle(document.querySelector("article.panel")!)
+    const card = document.querySelector("article.panel")!
+    const field = document.querySelector("input.field, select.field, textarea.field")!
+    const activeNav = document.querySelector('.nav-item[aria-current="page"]')!
+    const cardStyle = getComputedStyle(card)
     return {
-      border: card.borderTopColor,
-      radius: parseFloat(card.borderRadius),
-      animation: card.animationName,
+      border: cardStyle.borderTopColor,
+      borderWidth: cardStyle.borderTopWidth,
+      shadow: cardStyle.boxShadow,
+      radius: parseFloat(cardStyle.borderRadius),
+      fieldBorder: getComputedStyle(field).borderTopColor,
+      activeNavBackground: getComputedStyle(activeNav).backgroundColor,
+      activeIndicatorWidth: getComputedStyle(activeNav, "::before").width,
+      animation: cardStyle.animationName,
       direction: getComputedStyle(document.documentElement).direction,
     }
   })
-  expect(styles.border).toBe("rgba(201, 162, 39, 0.12)")
+  // Cards use a neutral hairline; gold stays reserved for controls and the
+  // active indicator instead of outlining every surface.
+  expect(styles.border).toBe("rgba(168, 176, 188, 0.1)")
+  expect(styles.borderWidth).toBe("1px")
+  expect(styles.shadow).not.toBe("none")
+  expect(styles.fieldBorder).toBe("rgba(201, 162, 39, 0.1)")
+  expect(styles.activeIndicatorWidth).toBe("2px")
+  expect(styles.activeNavBackground).not.toBe("rgba(0, 0, 0, 0)")
   expect(styles.radius).toBeGreaterThanOrEqual(16)
   expect(styles.radius).toBeLessThanOrEqual(18.4)
   expect(styles.animation).toBe("none")

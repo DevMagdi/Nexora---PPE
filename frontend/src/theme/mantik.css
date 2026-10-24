@@ -12,6 +12,12 @@
   --text-muted: #a8b0bc;
   --gold-border: rgba(201, 162, 39, 0.12);
 
+  /* Hairlines: structure is neutral, gold stays an accent. */
+  --hairline: rgba(168, 176, 188, 0.1);
+  --hairline-soft: rgba(168, 176, 188, 0.06);
+  --gold-hairline: rgba(201, 162, 39, 0.1);
+  --gold-hairline-focus: rgba(201, 162, 39, 0.18);
+
   --background: var(--navy);
   --page-background: linear-gradient(
     155deg,
@@ -31,11 +37,11 @@
   --secondary-foreground: var(--text-soft);
   --muted: var(--navy-deep);
   --muted-foreground: var(--text-muted);
-  --accent: rgba(201, 162, 39, 0.035);
+  --accent: rgba(201, 162, 39, 0.05);
   --accent-foreground: var(--gold-soft);
-  --border: var(--gold-border);
-  --separator: rgba(168, 176, 188, 0.075);
-  --input: var(--gold-border);
+  --border: var(--hairline);
+  --separator: var(--hairline-soft);
+  --input: var(--gold-hairline);
   --ring: var(--gold);
   --success: #7eb394;
   --success-light: rgba(126, 179, 148, 0.08);
@@ -50,7 +56,17 @@
   --chart-neutral: color-mix(in srgb, var(--text-muted) 40%, var(--navy-panel));
   --chart-grid: var(--separator);
   --chart-axis: var(--text-muted);
-  --shadow-card: 0 16px 52px rgba(17, 27, 43, 0.12);
-  --shadow-floating: 0 28px 96px rgba(17, 27, 43, 0.28);
+
+  /* Soft, long shadows with a faint top sheen instead of a metal-box drop. */
+  --shadow-card:
+    0 24px 60px -32px rgba(7, 13, 23, 0.9), 0 2px 10px -6px rgba(7, 13, 23, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --shadow-floating: 0 32px 92px -28px rgba(7, 13, 23, 0.92), 0 8px 26px -14px rgba(7, 13, 23, 0.5);
+  --shadow-subtle: 0 10px 30px -22px rgba(7, 13, 23, 0.7);
+
   --radius: 1.1rem;
+  --radius-control: 0.9rem;
+  --radius-item: 0.8rem;
+  --radius-pill: 999px;
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
 }
