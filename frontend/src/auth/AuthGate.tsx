@@ -125,7 +125,7 @@ export default function AuthGate() {
               <ShieldCheck className="size-6" strokeWidth={1.4} />
             </div>
             <div className="eyebrow mb-2" dir="ltr">
-              WELCOME TO NEXORA
+              WELCOME TO MANTIK
             </div>
             <h2 className="text-[28px]">تسجيل الدخول</h2>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
@@ -219,7 +219,7 @@ export default function AuthGate() {
           </div>
         </div>
         <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-          <span className="latin tracking-wide">NEXORA © {year}</span>
+          <span className="latin tracking-wide">MANTIK © {year}</span>
           <span>السلامة معيار التشغيل.</span>
         </div>
       </section>

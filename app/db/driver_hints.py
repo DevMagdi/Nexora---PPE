@@ -64,7 +64,7 @@ def database_startup_hint(database_url: str, exc: BaseException) -> str:
         if "lock request time out" in lowered or "lock timeout" in lowered:
             lines.append(
                 "  SQL Server could not acquire a schema lock before the configured timeout. "
-                "Stop any other Nexora/API or migration process using this database, "
+                "Stop any other Mantik/API or migration process using this database, "
                 "check for an open SQL transaction, then retry. Increase "
                 "DB_MIGRATION_LOCK_TIMEOUT_MS only if the migration is expected to wait longer."
             )

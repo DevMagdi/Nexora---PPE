@@ -195,10 +195,10 @@ def setup(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Create a production .env for one isolated Nexora on-prem installation."
+        description="Create a production .env for one isolated Mantik on-prem installation."
     )
     parser.add_argument(
-        "--host", required=True, help="DNS name used by Caddy, e.g. nexora.site.lan"
+        "--host", required=True, help="DNS name used by Caddy, e.g. mantik.site.lan"
     )
     parser.add_argument(
         "--rtsp-prefix",

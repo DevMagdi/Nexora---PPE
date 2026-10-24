@@ -113,6 +113,11 @@ export interface SystemMeta {
   scope: "industrial"
   model: "ppe_unified_best.pt"
   confidence: number
+  negative_confidence?: number
+  effective_negative_confidence?: number
+  platform_name?: "Mantik PPE"
+  capabilities_known?: boolean
+  supported_negative_rules?: RuleKey[] | null
   max_upload_mb: number
   max_video_seconds: number
   supported_source_types: CameraSourceType[]
@@ -123,7 +128,13 @@ export interface SystemMeta {
   usb_sources_enabled: boolean
   usb_device_indices: number[]
   onvif_mode: "metadata_only"
-  rules: { key: RuleKey; label_ar: string; label_en: string }[]
+  rules: {
+    key: RuleKey
+    label_ar: string
+    label_en: string
+    positive_supported?: boolean | null
+    negative_supported?: boolean | null
+  }[]
 }
 export interface DashboardData {
   range: RangeKey
@@ -147,7 +158,12 @@ export interface IssuedAccount extends UserAccount {
   initial_password: string
 }
 export interface ImageResult {
-  detections: { class_name: string; confidence: number; box: number[] }[]
+  detections: {
+    class_name: string
+    confidence: number
+    box: number[]
+    person_index?: number | null
+  }[]
   preview: string
   width: number
   height: number

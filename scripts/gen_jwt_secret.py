@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a strong JWT_SECRET for Nexora.
+"""Generate a strong JWT_SECRET for Mantik.
 
 HS256 (RFC 7518, Section 3.2) needs a key of at least 32 random bytes; short
 values fail fast at startup instead of serving forgeable tokens.
@@ -21,7 +21,7 @@ import sys
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate a strong JWT_SECRET for Nexora (HS256).")
+    parser = argparse.ArgumentParser(description="Generate a strong JWT_SECRET for Mantik (HS256).")
     parser.add_argument(
         "--bytes",
         type=int,

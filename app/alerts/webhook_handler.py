@@ -49,7 +49,7 @@ class SlackWebhookHandler(AlertHandler):
     async def send(self, violation: ViolationEvent) -> bool:
         payload = {
             "text": (
-                f":rotating_light: *Nexora PPE Violation Alert*\n"
+                f":rotating_light: *Mantik PPE Violation Alert*\n"
                 f"• *Camera:* #{violation.camera_id}\n"
                 f"• *Type:* `{violation.violation_type}`\n"
                 f"• *Confidence:* `{violation.confidence:.0%}`"

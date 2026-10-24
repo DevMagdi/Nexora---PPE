@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.core.detector import Detection
+from app.core.postprocess import resolve_ppe_conflicts
 from app.core.ppe import PPE_CLASSES, canonical_class_name, sanitize_enabled_classes
 
 
@@ -45,11 +46,17 @@ class ViolationChecker:
         camera_id: int,
         detections: list[Detection],
         enabled_classes: list[str] | None = None,
+        supported_negative_rules: frozenset[str] | None = None,
     ) -> list[ViolationEvent]:
         enabled = sanitize_enabled_classes(enabled_classes)
+        detections = resolve_ppe_conflicts(detections)
+        threshold = max(settings.DETECTION_CONFIDENCE, settings.DETECTION_NEGATIVE_CONFIDENCE)
         now = time.monotonic()
         events: list[ViolationEvent] = []
         for key in enabled:
+            if supported_negative_rules is not None and key not in supported_negative_rules:
+                self._states.pop((camera_id, key), None)
+                continue
             negative = PPE_CLASSES[key]["negative"]
             confidence = max(
                 (
@@ -57,7 +64,7 @@ class ViolationChecker:
                     for d in detections
                     if canonical_class_name(d.class_name) == negative
                     and d.source == "model"
-                    and d.confidence >= settings.DETECTION_CONFIDENCE
+                    and d.confidence >= threshold
                 ),
                 default=0.0,
             )

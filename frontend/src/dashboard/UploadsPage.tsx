@@ -19,6 +19,7 @@ export default function UploadsPage({
   refresh: () => Promise<void>
   onLive: (id: number) => void
 }) {
+  const alertConfidence = meta?.effective_negative_confidence ?? meta?.negative_confidence
   const [mode, setMode] = useState<"image" | "video">("image")
   const [file, setFile] = useState<File | null>(null)
   const [name, setName] = useState("")
@@ -60,7 +61,7 @@ export default function UploadsPage({
     setFile(file)
   }
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[380px_1fr]">
+    <div className="grid items-start gap-6 lg:grid-cols-[380px_1fr]">
       <section className="panel p-6">
         <div className="segmented mb-6">
           <button
@@ -156,7 +157,12 @@ export default function UploadsPage({
               </div>
             </>
           )}
-          <RulePicker value={rules} onChange={setRules} disabled={mutation.isPending} />
+          <RulePicker
+            value={rules}
+            onChange={setRules}
+            disabled={mutation.isPending}
+            supportedNegativeRules={meta?.supported_negative_rules}
+          />
           <InlineError error={validation || mutation.error} />
           <Button
             className="w-full"
@@ -184,6 +190,9 @@ export default function UploadsPage({
             <p>
               الموديل الصناعي الموحّد · حد الثقة{" "}
               {meta ? `${Math.round(meta.confidence * 100)}%` : "—"}
+              {alertConfidence
+                ? ` · السالب للتنبيه ${Math.round(alertConfidence * 100)}% + ثبات زمني`
+                : ""}
             </p>
           </div>
         </div>
@@ -195,6 +204,10 @@ export default function UploadsPage({
               alt="نتيجة رصد معدات الوقاية في الصورة المرفوعة"
             />
             <div className="p-6">
+              <p className="source-help mb-4">
+                حُسمت التصنيفات المتعارضة قبل الرسم. الذهبي للمعدات، الفاتح للشخص، والأحمر للتصنيف
+                السلبي. الصورة معاينة فقط ولا تُنشئ حدث مخالفة.
+              </p>
               <p className="mb-4 text-xs text-muted-foreground">
                 {num(image.detections.length)} كشف ·{" "}
                 <span className="latin">

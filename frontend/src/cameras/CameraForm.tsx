@@ -343,7 +343,12 @@ export default function CameraForm({
           </details>
         </>
       )}
-      <RulePicker value={rules} onChange={setRules} disabled={mutation.isPending} />
+      <RulePicker
+        value={rules}
+        onChange={setRules}
+        disabled={mutation.isPending}
+        supportedNegativeRules={meta?.supported_negative_rules}
+      />
       {formError && (
         <p className="notice notice-error" role="alert">
           {formError}

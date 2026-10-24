@@ -1,4 +1,4 @@
-"""Nexora PPE backend package.
+"""Mantik PPE backend package.
 
 Importing anything from ``app`` first runs :mod:`app.native_compat`: on machines
 whose Application Control policy blocks SQLAlchemy's compiled ``_*_cy`` modules

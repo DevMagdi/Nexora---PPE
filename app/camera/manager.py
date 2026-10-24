@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.detector import PPEDetector
 from app.core.frame_annotator import annotate_frame
 from app.core.logging import get_logger
+from app.core.postprocess import resolve_ppe_conflicts
 from app.core.ppe import canonical_class_name, display_classes, sanitize_enabled_classes
 from app.core.violation_checker import ViolationChecker, apply_persist_floor
 from app.db.repository import record_alert_log, save_violation
@@ -536,14 +537,21 @@ class CameraManager:
 
                 inference_started = time.perf_counter()
                 detections = await loop.run_in_executor(None, detector.detect, frame)
+                detections = resolve_ppe_conflicts(detections)
                 entry.last_inference_ms = (time.perf_counter() - inference_started) * 1000
                 display_detections = self._filter_detections_for_display(
                     entry.enabled_classes, detections
                 )
                 entry.latest_counts = self._compute_counts(display_detections)
 
+                supported = getattr(detector, "supported_negative_rules", None)
+                if not isinstance(supported, frozenset):
+                    supported = None  # Explicit detector doubles may not have checkpoint metadata.
                 violations = checker.check(
-                    camera_id, detections, enabled_classes=entry.enabled_classes
+                    camera_id,
+                    detections,
+                    enabled_classes=entry.enabled_classes,
+                    supported_negative_rules=supported,
                 )
                 if violations:
                     evidence = annotate_frame(frame, display_detections, [])

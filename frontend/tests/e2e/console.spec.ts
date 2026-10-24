@@ -122,7 +122,7 @@ test("alerts can be reviewed, resolved and exported with server filters", async 
   await expect(page.locator("tbody tr")).toHaveCount(3)
   const download = page.waitForEvent("download")
   await page.getByRole("button", { name: "تصدير CSV" }).click()
-  expect((await download).suggestedFilename()).toBe("nexora-industrial-events.csv")
+  expect((await download).suggestedFilename()).toBe("mantik-industrial-events.csv")
 })
 
 test("site settings and role provisioning expose only industrial options", async ({ page }) => {
@@ -248,4 +248,74 @@ test("live stream controls display returned frames and stop without fabricating 
   await page.getByRole("button", { name: "إيقاف البث" }).click()
   await expect(page.getByRole("heading", { name: "مصدر المراقبة متوقف" })).toBeVisible()
   await expect(page.getByRole("img", { name: /بث مباشر/ })).toHaveCount(0)
+})
+
+test("Mantik identity is consistent on login and all console sections", async ({ page }) => {
+  await mockApi(page, { signedIn: false })
+  await page.goto("/")
+  await expect(page).toHaveTitle(/Mantik/)
+  await expect(page.getByRole("img", { name: "Mantik Industrial Safety" })).toBeVisible()
+  await expect(page.locator("body")).not.toContainText(/nexora/i)
+  await page.getByLabel("اسم المستخدم", { exact: true }).fill("site.admin")
+  await page.getByLabel("كلمة المرور", { exact: true }).fill("PilotTest!2026")
+  await page.getByRole("button", { name: "الدخول إلى لوحة العمليات" }).click()
+  await expect(page.getByRole("heading", { name: "نظرة عامة", exact: true })).toBeVisible()
+  for (const tab of [
+    "تحليل الصور والفيديو",
+    "إدارة الكاميرات",
+    "التنبيهات وسجل الأحداث",
+    "المصانع والمواقع",
+    "المراقبة المباشرة",
+  ]) {
+    await navigate(page, tab)
+    await expect(page).toHaveTitle(/Mantik/)
+    await expect(page.locator("body")).not.toContainText(/nexora/i)
+  }
+})
+
+test("a resolved positive helmet preview has no contradictory negative or new event", async ({
+  page,
+}) => {
+  await mockApi(page, { empty: true, conflictResolvedPreview: true })
+  await page.goto("/")
+  await navigate(page, "تحليل الصور والفيديو")
+  await expect(page.getByText(/السالب للتنبيه 60%/)).toBeVisible()
+  await expect(page.getByText(/ولا تُنشئ تنبيهاً زمنياً/)).toBeVisible()
+  await page
+    .getByLabel("اختر صورة من موقع العمل")
+    .setInputFiles({ name: "helmet.png", mimeType: "image/png", buffer: IMAGE })
+  await page.getByRole("button", { name: "تحليل الصورة", exact: true }).click()
+  await expect(
+    page.getByRole("img", { name: "نتيجة رصد معدات الوقاية في الصورة المرفوعة" }),
+  ).toBeVisible()
+  await expect(page.getByText("68%", { exact: true })).toBeVisible()
+  await expect(page.locator(".badge").filter({ hasText: "68%" })).toContainText("خوذة أمان")
+  await expect(page.getByText("بدون خوذة أمان", { exact: true })).toHaveCount(0)
+  await navigate(page, "التنبيهات وسجل الأحداث")
+  await expect(page.getByText("لا توجد أحداث في هذه الفترة")).toBeVisible()
+})
+
+test("missing negative Vest is display-only without hiding positive vest detections", async ({
+  page,
+}) => {
+  await mockApi(page, { missingNegativeVest: true })
+  await page.goto("/")
+  await navigate(page, "تحليل الصور والفيديو")
+  const vest = page.getByRole("checkbox", { name: /سترة عاكسة/ })
+  await expect(vest).toBeEnabled()
+  await expect(vest).toBeChecked()
+  await expect(page.getByText("عرض فقط", { exact: true })).toBeVisible()
+  await page
+    .getByLabel("اختر صورة من موقع العمل")
+    .setInputFiles({ name: "vest.png", mimeType: "image/png", buffer: IMAGE })
+  await page.getByRole("button", { name: "تحليل الصورة", exact: true }).click()
+  await expect(page.getByText("91%", { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole("img", { name: "نتيجة رصد معدات الوقاية في الصورة المرفوعة" }),
+  ).toBeVisible()
+  await expect(page.locator(".badge").filter({ hasText: "91%" })).toContainText("سترة عاكسة")
+  await navigate(page, "إدارة الكاميرات")
+  await page.getByRole("button", { name: "إضافة كاميرا", exact: true }).click()
+  await expect(page.getByRole("dialog").getByRole("checkbox", { name: /سترة عاكسة/ })).toBeEnabled()
+  await expect(page.getByRole("dialog").getByText("عرض فقط", { exact: true })).toBeVisible()
 })

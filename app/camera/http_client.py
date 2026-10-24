@@ -87,7 +87,7 @@ class MediaHTTPClient:
                 headers={
                     "Host": host or "",
                     "Accept-Encoding": "identity",
-                    "User-Agent": "Nexora-PPE/4",
+                    "User-Agent": "Mantik-PPE/4",
                 },
             )
             request.extensions["sni_hostname"] = parsed.hostname

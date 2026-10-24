@@ -1,4 +1,4 @@
-# نشر Nexora PPE داخل الموقع
+# نشر Mantik PPE داخل الموقع
 
 ## قبل التشغيل
 
@@ -14,7 +14,7 @@
 
 ```bash
 python scripts/setup_onprem.py \
-  --host nexora.site.lan \
+  --host Mantik.site.lan \
   --rtsp-prefix rtsp://192.168.10.20:554 \
   --https-bind-address 192.168.20.10
 ```

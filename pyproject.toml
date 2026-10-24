@@ -1,5 +1,5 @@
 [project]
-name = "Nexora"
+name = "Mantik"
 version = "4.0.0"
 description = "Industrial PPE monitoring for factories, construction sites, workshops and warehouses"
 requires-python = ">=3.11"

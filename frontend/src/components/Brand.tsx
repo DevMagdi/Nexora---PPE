@@ -1,6 +1,10 @@
 export default function Brand({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex items-center gap-3 text-primary" aria-label="Nexora Industrial Safety">
+    <div
+      className="flex items-center gap-3 text-primary"
+      role="img"
+      aria-label="Mantik Industrial Safety"
+    >
       <svg aria-hidden="true" width="35" height="39" viewBox="0 0 35 39" fill="none">
         <path
           d="M17.5 1.5 33 10v18L17.5 37 2 28V10L17.5 1.5Z"
@@ -8,7 +12,7 @@ export default function Brand({ compact = false }: { compact?: boolean }) {
           strokeWidth="1.4"
         />
         <path
-          d="M10 26V13l15 13V13M10 13l15 13"
+          d="M9 26V13l8.5 8L26 13v13"
           stroke="currentColor"
           strokeWidth="2.2"
           strokeLinejoin="round"
@@ -17,7 +21,7 @@ export default function Brand({ compact = false }: { compact?: boolean }) {
       {!compact && (
         <div dir="ltr">
           <div className="latin text-[22px] font-semibold tracking-[.14em] leading-tight">
-            NEXORA<span className="ms-1 text-[8px] align-top">®</span>
+            MANTIK
           </div>
           <div className="latin mt-1 text-[7px] tracking-[.29em] text-muted-foreground">
             INDUSTRIAL SAFETY INTELLIGENCE

@@ -3,7 +3,7 @@
 
 Windows machines that enforce an Application Control policy (WDAC, Smart App
 Control or AppLocker) block native modules they do not trust, which reaches
-Nexora as::
+Mantik as::
 
     ImportError: DLL load failed while importing _row_cy:
     An Application Control policy has blocked this file.
@@ -17,7 +17,7 @@ Usage:
     python scripts/check_native_deps.py --quick    # skip the heavy ML imports
     python scripts/check_native_deps.py --json     # machine-readable output
 
-Exit code: 0 when everything Nexora needs can run (the automatic pure-Python
+Exit code: 0 when everything Mantik needs can run (the automatic pure-Python
 SQLAlchemy fallback in ``app/native_compat.py`` counts as "can run"), 1 when a
 required module is blocked or missing.
 """
@@ -57,7 +57,7 @@ class Probe:
     distribution: str = ""
     required: bool = True
     note: str = ""
-    # True when Nexora can work around a block by itself (app/native_compat.py).
+    # True when Mantik can work around a block by itself (app/native_compat.py).
     fallback: bool = False
 
 
@@ -333,7 +333,7 @@ def describe_sqlalchemy(results: list[Result], status: dict[str, object]) -> lis
     if item.status == "blocked":
         return [
             f"  SQLAlchemy: {version} — compiled (Cython) modules BLOCKED by the OS",
-            "              Nexora runs on SQLAlchemy's pure-Python modules automatically",
+            "              Mantik runs on SQLAlchemy's pure-Python modules automatically",
             "              (app/native_compat.py); behaviour is identical, queries slightly slower",
         ]
     return [f"  SQLAlchemy: {version} — {STATUS_LABELS[item.status]}: {item.detail}"]
@@ -342,7 +342,7 @@ def describe_sqlalchemy(results: list[Result], status: dict[str, object]) -> lis
 def print_report(results: list[Result], status: dict[str, object]) -> int:
     """Print the table + verdict. ``results`` must already be through
     :func:`mark_indirect_blocks`."""
-    print("Nexora native dependency check")
+    print("Mantik native dependency check")
     print(f"  python    : {platform.python_version()} ({sys.executable})")
     print(f"  platform  : {platform.platform()}")
     print(f"  project   : {ROOT}")
@@ -394,7 +394,7 @@ def print_verdict(
     broken: list[Result],
 ) -> None:
     if not blocked and not missing_required and not broken:
-        print("Verdict: every module Nexora needs loads on this machine.")
+        print("Verdict: every module Mantik needs loads on this machine.")
         print("Start the API with:")
         print("  python -m uvicorn app.main:app --reload --reload-dir app")
         return
@@ -410,7 +410,7 @@ def print_verdict(
     hard = [item for item in blocked if not item.probe.fallback]
     for item in automatic + hard:
         suffix = (
-            "Nexora works around this" if item.probe.fallback else "no fallback - must be fixed"
+            "Mantik works around this" if item.probe.fallback else "no fallback - must be fixed"
         )
         print(f"{item.label}: {item.probe.module} ({suffix})")
         print(f"  {item.detail}")
@@ -469,9 +469,9 @@ def print_verdict(
 
     print()
     if hard or missing_required or broken:
-        print("Verdict: Nexora cannot run until the problems above are fixed.")
+        print("Verdict: Mantik cannot run until the problems above are fixed.")
     else:
-        print("Verdict: Nexora runs on this machine (see the notes above).")
+        print("Verdict: Mantik runs on this machine (see the notes above).")
         print("Start the API with:")
         print("  python -m uvicorn app.main:app --reload --reload-dir app")
 

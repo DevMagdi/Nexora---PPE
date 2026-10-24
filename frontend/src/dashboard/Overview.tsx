@@ -161,7 +161,7 @@ export default function Overview({
               <p>{range === "24h" ? "آخر 24 ساعة، مجمّعة بالساعة" : "آخر 7 أيام، مجمّعة باليوم"}</p>
             </div>
             <span className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span className="size-2 rounded-full bg-primary" />
+              <span className="size-2 rounded-full" style={{ background: "var(--chart-gold)" }} />
               الأحداث
             </span>
           </div>
@@ -174,7 +174,7 @@ export default function Overview({
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={data.series} margin={{ top: 5, right: 15, bottom: 5, left: -25 }}>
                 <defs>
-                  <linearGradient id="nexora-gold-fill" x1="0" y1="0" x2="0" y2="1">
+                  <linearGradient id="mantik-activity-fill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--chart-gold)" stopOpacity={0.22} />
                     <stop offset="95%" stopColor="var(--chart-gold)" stopOpacity={0} />
                   </linearGradient>
@@ -205,7 +205,7 @@ export default function Overview({
                         <p>
                           {range === "24h" ? formatTime(String(label)) : formatDate(String(label))}
                         </p>
-                        <p className="mt-1 text-primary">{num(Number(payload[0].value))} حدث</p>
+                        <p className="mt-1 text-foreground">{num(Number(payload[0].value))} حدث</p>
                       </div>
                     ) : null
                   }
@@ -215,7 +215,7 @@ export default function Overview({
                   dataKey="count"
                   stroke="var(--chart-gold)"
                   strokeWidth={2}
-                  fill="url(#nexora-gold-fill)"
+                  fill="url(#mantik-activity-fill)"
                   isAnimationActive={false}
                 />
               </AreaChart>

@@ -16,6 +16,8 @@ export async function mockApi(
     empty?: boolean
     usb?: boolean
     cameraFailure?: boolean
+    missingNegativeVest?: boolean
+    conflictResolvedPreview?: boolean
   } = {},
 ) {
   let signedIn = options.signedIn ?? true
@@ -137,7 +139,18 @@ export async function mockApi(
         usb_sources_enabled: options.usb ?? false,
         usb_device_indices: options.usb ? [0, 1] : [],
         onvif_mode: "metadata_only",
-        rules,
+        platform_name: "Mantik PPE",
+        negative_confidence: 0.6,
+        effective_negative_confidence: 0.6,
+        capabilities_known: true,
+        supported_negative_rules: rules
+          .map((rule) => rule.key)
+          .filter((key) => !options.missingNegativeVest || key !== "vest"),
+        rules: rules.map((rule) => ({
+          ...rule,
+          positive_supported: true,
+          negative_supported: !options.missingNegativeVest || rule.key !== "vest",
+        })),
       })
     if (path === "/sites" && method === "GET") return json(sites)
     if (path === "/sites" && method === "POST") {
@@ -296,7 +309,16 @@ export async function mockApi(
     }
     if (path === "/inference/image")
       return json({
-        detections: [{ class_name: "Hardhat", confidence: 0.91, box: [0, 0, 1, 1] }],
+        // Already-resolved server output: UI contracts, not a fake ML accuracy test.
+        detections: [
+          {
+            class_name: options.missingNegativeVest ? "Safety Vest" : "Hardhat",
+            confidence: options.conflictResolvedPreview ? 0.68 : 0.91,
+            box: [0, 0, 1, 1],
+            source: "model",
+            person_index: null,
+          },
+        ],
         preview: `data:image/png;base64,${IMAGE.toString("base64")}`,
         width: 1,
         height: 1,

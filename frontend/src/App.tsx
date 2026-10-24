@@ -224,7 +224,7 @@ export default function App({ user }: { user: MeResponse }) {
           <div className="page-head">
             <div>
               <div className="eyebrow" dir="ltr">
-                NEXORA / INDUSTRIAL OPERATIONS
+                MANTIK / INDUSTRIAL OPERATIONS
               </div>
               <h1>{TAB_TITLES[tab]}</h1>
               <p>{DESCRIPTIONS[tab]}</p>
@@ -261,7 +261,7 @@ export default function App({ user }: { user: MeResponse }) {
           <footer className="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5 text-[9px] text-muted-foreground">
             <span>مصانع · مواقع إنشاء · ورش صناعية · مستودعات</span>
             <span className="latin tracking-wider" dir="ltr">
-              NEXORA PPE · LOCAL INDUSTRIAL INTELLIGENCE
+              MANTIK PPE · LOCAL INDUSTRIAL INTELLIGENCE
             </span>
           </footer>
         </main>
