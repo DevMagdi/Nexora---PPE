@@ -8,13 +8,22 @@ services:
       - "8000:8000"
     environment:
       APP_ENV: dev
+      ALLOWED_VIDEO_DIR: /app/videos
+      UPLOADS_DIR: /app/videos/uploads
+      ALLOWED_RTSP_PREFIXES: ${ALLOWED_RTSP_PREFIXES:-}
       DATABASE_URL: sqlite+aiosqlite:///./ppe_detection.db
-      CONSTRUCTION_MODEL_PATH: Model/ppe.pt
-      MEDICAL_MODEL_PATH: Model/bestMedicalModel_FINAL.pt
-      HYBRID_DETECTION_ENABLED: "true"
+      PPE_MODEL_PATH: /app/Model/ppe_unified_best.pt
+      DETECTION_CONFIDENCE: "0.50"
     volumes:
       - ./app:/app/app
-      - ./Model:/app/Model
+      - ./migrations:/app/migrations
+      - type: bind
+        source: ./Model/ppe_unified_best.pt
+        target: /app/Model/ppe_unified_best.pt
+        read_only: true
+        bind:
+          create_host_path: false
+      - dev_videos:/app/videos
       - ./violation_frames:/app/violation_frames
     security_opt:
       - no-new-privileges:true
@@ -29,6 +38,9 @@ services:
     volumes:
       - ./frontend:/frontend
       - /frontend/node_modules
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     depends_on:
       - app
+
+volumes:
+  dev_videos:

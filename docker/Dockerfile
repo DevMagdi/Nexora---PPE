@@ -19,14 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first (layer cache)
-COPY requirements/prod.txt requirements/base.txt requirements/
+COPY requirements/prod.txt requirements/base.txt requirements/runtime.txt requirements/
 RUN pip install --no-cache-dir -r requirements/prod.txt
 
-# Copy backend code, migrations, and models
+# Copy backend and migrations. The approved checkpoint is mounted read-only at deploy time.
 COPY app/ app/
 COPY migrations/ migrations/
 COPY alembic.ini ./
-COPY Model/ppe.pt Model/bestMedicalModel_FINAL.pt Model/
+RUN mkdir -p Model
 
 # Copy built React SPA from Stage 1
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist

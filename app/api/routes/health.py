@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_camera_manager
 from app.camera.manager import CameraManager
@@ -22,8 +22,6 @@ async def metrics(
     request: Request,
     user: User = Depends(require_roles("admin")),
 ):
-    if user.sector != "both":
-        raise HTTPException(status_code=403, detail="System metrics require a both-sector administrator")
     manager: CameraManager = get_camera_manager(request)
     return {
         "cameras_active": manager.active_count(),

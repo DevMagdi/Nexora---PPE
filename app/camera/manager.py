@@ -16,22 +16,11 @@ from app.alerts.webhook_handler import SlackWebhookHandler, WebhookHandler
 from app.camera.source import CameraSource
 from app.camera.source_security import validate_file_uri, validate_rtsp_uri
 from app.core.config import settings
-from app.core.detector import PPEDetector, is_skin_source
+from app.core.detector import PPEDetector
 from app.core.frame_annotator import annotate_frame
 from app.core.logging import get_logger
-from app.core.ppe import (
-    CANONICAL_MAP,
-    Profile,
-    canonical_class_name,
-    class_key,
-    sanitize_enabled_classes,
-)
-from app.core.violation_checker import (
-    BaseViolationChecker,
-    ConstructionViolationChecker,
-    MedicalViolationChecker,
-    apply_persist_floor,
-)
+from app.core.ppe import canonical_class_name, display_classes, sanitize_enabled_classes
+from app.core.violation_checker import ViolationChecker, apply_persist_floor
 from app.db.repository import record_alert_log, save_violation
 
 logger = get_logger(__name__)
@@ -40,7 +29,6 @@ logger = get_logger(__name__)
 @dataclass
 class _CameraEntry:
     camera_id: int
-    profile: Profile
     source: CameraSource
     enabled_classes: list[str] = field(default_factory=list)
     task: asyncio.Task | None = None
@@ -58,29 +46,21 @@ class _CameraEntry:
 
 
 class CameraManager:
-    def __init__(self, detectors: dict[str, PPEDetector]) -> None:
-        self.detectors = detectors
+    def __init__(self, detector: PPEDetector) -> None:
+        self.detector = detector
 
         self._entries: dict[int, _CameraEntry] = {}
         self._ws_subscribers: dict[int, list[asyncio.Queue]] = {}
         self._cleanup_task: asyncio.Task | None = None
         self._locks: dict[int, asyncio.Lock] = {}
 
-        construction_persist = apply_persist_floor(
-            settings.VIOLATION_PERSIST_SECONDS,
-            settings.VIOLATION_PERSIST_FLOOR_SECONDS,
+        self._checker = ViolationChecker(
+            cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
+            persist_seconds=apply_persist_floor(
+                settings.VIOLATION_PERSIST_SECONDS,
+                settings.VIOLATION_PERSIST_FLOOR_SECONDS,
+            ),
         )
-        self._checkers: dict[str, BaseViolationChecker] = {
-            "construction": ConstructionViolationChecker(
-                cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
-                persist_seconds=construction_persist,
-            ),
-            "medical": MedicalViolationChecker(
-                cooldown_seconds=settings.ALERT_COOLDOWN_SECONDS,
-                persist_seconds=settings.MEDICAL_VIOLATION_PERSIST_SECONDS,
-                absence_persist_seconds=construction_persist,
-            ),
-        }
 
         self._dispatcher = AlertDispatcher(self._build_alert_handlers())
 
@@ -129,7 +109,6 @@ class CameraManager:
             try:
                 await self._launch_camera(
                     cam.id,
-                    cam.profile,  # type: ignore[arg-type]
                     cam.source_type,
                     cam.source_uri,
                     cam.enabled_classes,
@@ -159,17 +138,6 @@ class CameraManager:
     # ------------------------------------------------------------------
 
     def _build_source(self, source_type: str, source_uri: str) -> CameraSource:
-        if source_type == "webcam":
-            from app.camera.webcam_source import WebcamSource
-
-            try:
-                idx = int(source_uri)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "webcam source_uri must be an integer index like '0' or '1'"
-                ) from exc
-            return WebcamSource(idx)
-
         if source_type == "rtsp":
             from app.camera.rtsp_source import RTSPSource
 
@@ -191,7 +159,6 @@ class CameraManager:
     async def _launch_camera(
         self,
         camera_id: int,
-        profile: Profile,
         source_type: str,
         source_uri: str,
         enabled_classes: list[str] | None = None,
@@ -207,13 +174,18 @@ class CameraManager:
 
             source = self._build_source(source_type, source_uri)
             logger.info(
-                "Opening camera source (camera_id=%d source_type=%s profile=%s)",
+                "Opening industrial camera source (camera_id=%d source_type=%s)",
                 camera_id,
                 source_type,
-                profile,
             )
             try:
                 connected = await source.connect()
+            except asyncio.CancelledError:
+                # An aborted start request can leave a native open running. The
+                # source lock makes this wait for that open before releasing it.
+                with contextlib.suppress(Exception):
+                    await source.release()
+                raise
             except Exception as exc:
                 logger.error(
                     "Camera source failed to open (camera_id=%d error_type=%s)",
@@ -223,26 +195,28 @@ class CameraManager:
                 with contextlib.suppress(Exception):
                     await source.release()
                 raise ValueError(
-                    "Could not open the camera source. Check its index, permissions, and availability."
+                    "Could not open the camera source. Check its URI, permissions, and availability."
                 ) from None
             if not connected:
-                logger.error("Camera source did not open (camera_id=%d source_type=%s)", camera_id, source_type)
+                logger.error(
+                    "Camera source did not open (camera_id=%d source_type=%s)",
+                    camera_id,
+                    source_type,
+                )
                 with contextlib.suppress(Exception):
                     await source.release()
                 return False
 
             entry = _CameraEntry(
                 camera_id=camera_id,
-                profile=profile,
                 source=source,
-                enabled_classes=sanitize_enabled_classes(profile, enabled_classes),
+                enabled_classes=sanitize_enabled_classes(enabled_classes),
             )
             self._entries[camera_id] = entry
             entry.task = asyncio.create_task(self._process_loop(entry), name=f"camera-{camera_id}")
             logger.info(
-                "Camera %d processing started (profile=%s enabled_classes=%s)",
+                "Camera %d processing started (enabled_classes=%s)",
                 camera_id,
-                profile,
                 entry.enabled_classes,
             )
             return True
@@ -270,7 +244,6 @@ class CameraManager:
     async def start_camera(
         self,
         camera_id: int,
-        profile: Profile,
         source_type: str,
         source_uri: str,
         enabled_classes: list[str] | None = None,
@@ -285,9 +258,7 @@ class CameraManager:
             logger.warning("Restarting camera %d because no fresh frame is available", camera_id)
             await self.stop_camera(camera_id)
 
-        if not await self._launch_camera(
-            camera_id, profile, source_type, source_uri, enabled_classes
-        ):
+        if not await self._launch_camera(camera_id, source_type, source_uri, enabled_classes):
             return False
 
         entry = self._entries.get(camera_id)
@@ -299,9 +270,8 @@ class CameraManager:
             )
             await self.stop_camera(camera_id)
             raise ValueError(
-                "The camera opened but no video frame arrived in time. Check the camera index, "
-                "Windows camera permissions, and whether another app is using it. If the backend "
-                "runs in Docker, the host webcam must be exposed to the container."
+                "The camera opened but no video frame arrived in time. Check the RTSP address, "
+                "network access, camera credentials and video availability."
             )
 
         logger.info("Camera %d is live and its first processed frame is ready", camera_id)
@@ -322,7 +292,7 @@ class CameraManager:
             self._entries.pop(camera_id, None)
 
             # reset checker state
-            self._checkers[entry.profile].reset(camera_id)
+            self._checker.reset(camera_id)
 
             logger.info("Camera %d stopped", camera_id)
             return True
@@ -331,86 +301,49 @@ class CameraManager:
         entry = self._entries.get(camera_id)
         if not entry:
             return
-        entry.enabled_classes = sanitize_enabled_classes(entry.profile, enabled_classes)
+        entry.enabled_classes = sanitize_enabled_classes(enabled_classes)
+        self._checker.reset(camera_id)
 
     # ------------------------------------------------------------------
     # Processing
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _count_by_name(detections: list, name: str) -> int:
-        # مقارنة بالأسماء الموحّدة: `no mask` (موديل طبي) == `NO-Mask` (إنشائي/فلتر الجلد)
-        key = canonical_class_name(name).lower()
-        return sum(1 for d in detections if canonical_class_name(d.class_name).lower() == key)
+    def _filter_detections_for_display(enabled_classes: list[str], detections: list) -> list:
+        allowed = display_classes(enabled_classes)
+        return [d for d in detections if canonical_class_name(d.class_name) in allowed]
 
     @staticmethod
-    def _skin_hits(detections: list) -> int:
-        """عدد الكشوف اللي أكّدها/ولّدها فلتر الجلد (distanceTransform / جسر العينين)."""
-        return sum(1 for d in detections if is_skin_source(getattr(d, "source", None)))
-
-    def _filter_detections_for_display(
-        self, profile: Profile, enabled_classes: list[str], detections: list
-    ) -> list:
-        """
-        مزامنة العرض مع قواعد الكاميرا (rule-synced display).
-
-        فاحص المخالفات بيشتغل على الفئات المفعّلة للكاميرا فقط، فالعرض لازم
-        يعكس نفس القواعد بالظبط: يُرسم ``Person`` (للسياق) + الفئات الموجبة/
-        السالبة التابعة للمفاتيح المفعّلة — بما فيها الكشوف المولّدة من فلتر
-        الجلد. أي فئة مش مفعّلة على الكاميرا متظهرش على البث ولا في الأسطر
-        الإحصائية، حتى لو الموديل كشفها.
-        """
-        allowed_keys = {"person"}
-        for key in enabled_classes or []:
-            cfg = CANONICAL_MAP.get(profile, {}).get(key)
-            if not cfg:
-                continue
-            for name in (cfg.get("positive"), cfg.get("negative")):
-                if name:
-                    allowed_keys.add(class_key(name))
-        return [
-            d
-            for d in detections
-            if class_key(canonical_class_name(d.class_name)) in allowed_keys
-        ]
-
-    def _compute_counts(self, profile: Profile, detections: list) -> dict:
-        # العدّاد بيربط الكلاس الموحّد (canonical) بالخانات اللي الفرونت بيقراها،
-        # فبيشتغل مع موديل طبي (no mask) أو إنشائي (NO-Mask) أو كشف من فلتر الجلد.
-        if profile == "construction":
-            return {
-                "hardhat": self._count_by_name(detections, "Hardhat"),
-                "vest": self._count_by_name(detections, "Safety Vest"),
-                "person": self._count_by_name(detections, "Person"),
-                "no_mask": self._count_by_name(detections, "NO-Mask"),
-                "no_gloves": self._count_by_name(detections, "NO-Gloves"),
-                "no_goggles": self._count_by_name(detections, "NO-Goggles"),
-                "skin_hits": self._skin_hits(detections),
-                "total": len(detections),
-            }
-        return {
-            "person": self._count_by_name(detections, "Person"),
-            "no_mask": self._count_by_name(detections, "NO-Mask"),
-            "no_gloves": self._count_by_name(detections, "NO-Gloves"),
-            "no_goggles": self._count_by_name(detections, "NO-Goggles"),
-            "no_cap": self._count_by_name(detections, "NO-Head Cap"),
-            "skin_hits": self._skin_hits(detections),
-            "total": len(detections),
+    def _compute_counts(detections: list) -> dict:
+        keys = {
+            "Person": "person",
+            "Hardhat": "hardhat",
+            "NO-Hardhat": "no_hardhat",
+            "Safety Vest": "vest",
+            "NO-Safety Vest": "no_vest",
+            "Gloves": "gloves",
+            "NO-Gloves": "no_gloves",
+            "Safety Boots": "boots",
+            "NO-Boot": "no_boot",
+            "Goggles": "goggles",
+            "NO-Goggles": "no_goggles",
         }
+        counts = dict.fromkeys(keys.values(), 0)
+        for detection in detections:
+            key = keys.get(canonical_class_name(detection.class_name))
+            if key:
+                counts[key] += 1
+        counts["total"] = sum(counts.values())
+        return counts
 
-    def _stats_lines(self, profile: Profile, counts: dict) -> list[str]:
-        if profile == "construction":
-            return [
-                f"Hardhats: {counts.get('hardhat', 0)}",
-                f"Safety Vests: {counts.get('vest', 0)}",
-                f"People: {counts.get('person', 0)}",
-                f"NO-Goggles: {counts.get('no_goggles', 0)}",
-            ]
+    @staticmethod
+    def _stats_lines(counts: dict) -> list[str]:
         return [
-            f"NO-Mask: {counts.get('no_mask', 0)}",
-            f"NO-Gloves: {counts.get('no_gloves', 0)}",
+            f"People: {counts.get('person', 0)}",
+            f"Hardhats: {counts.get('hardhat', 0)} | NO-Hardhat: {counts.get('no_hardhat', 0)}",
+            f"Safety Vests: {counts.get('vest', 0)} | NO-Vest: {counts.get('no_vest', 0)}",
+            f"NO-Gloves: {counts.get('no_gloves', 0)} | NO-Boot: {counts.get('no_boot', 0)}",
             f"NO-Goggles: {counts.get('no_goggles', 0)}",
-            f"NO-HeadCap: {counts.get('no_cap', 0)}",
         ]
 
     async def _save_violation_frame(
@@ -420,7 +353,9 @@ class CameraManager:
         os.makedirs(frame_dir, exist_ok=True)
         fname = f"violation_{int(time.time())}_{uuid.uuid4().hex[:8]}.jpg"
         abs_path = os.path.join(frame_dir, fname)
-        await loop.run_in_executor(None, cv2.imwrite, abs_path, frame)
+        written = await loop.run_in_executor(None, cv2.imwrite, abs_path, frame)
+        if not written:
+            raise RuntimeError("Could not write the industrial violation evidence frame")
         return f"camera_{camera_id}/{fname}".replace("\\", "/")
 
     async def _handle_violations(self, entry: _CameraEntry, violations: list, frame) -> None:
@@ -449,14 +384,19 @@ class CameraManager:
         camera_id = entry.camera_id
         loop = asyncio.get_running_loop()
 
-        detector = self.detectors[entry.profile]
-        checker = self._checkers[entry.profile]
+        detector = self.detector
+        checker = self._checker
 
+        cancelled = False
         try:
             while True:
                 cycle_started = time.perf_counter()
                 frame = await entry.source.read_frame()
                 if frame is None:
+                    if getattr(entry.source, "exhausted", False):
+                        logger.info("Camera %d video processing completed", camera_id)
+                        break
+                    checker.reset(camera_id)
                     entry.consecutive_read_failures += 1
                     now = time.monotonic()
                     if (
@@ -483,24 +423,24 @@ class CameraManager:
                 inference_started = time.perf_counter()
                 detections = await loop.run_in_executor(None, detector.detect, frame)
                 entry.last_inference_ms = (time.perf_counter() - inference_started) * 1000
-                entry.latest_counts = self._compute_counts(entry.profile, detections)
+                display_detections = self._filter_detections_for_display(
+                    entry.enabled_classes, detections
+                )
+                entry.latest_counts = self._compute_counts(display_detections)
 
                 violations = checker.check(
                     camera_id, detections, enabled_classes=entry.enabled_classes
                 )
-                await self._handle_violations(entry, violations, frame)
+                if violations:
+                    evidence = annotate_frame(frame, display_detections, [])
+                    await self._handle_violations(entry, violations, evidence)
 
                 show_alert = time.time() < entry.alert_sent_until
-                # مزامنة العرض مع القواعد: البث والأسطر الإحصائية يعكسان فقط
-                # الفئات المفعّلة لهذه الكاميرا (تيليمتري الـ WebSocket كاملة كما هي)
-                display_detections = self._filter_detections_for_display(
-                    entry.profile, entry.enabled_classes, detections
-                )
-                display_counts = self._compute_counts(entry.profile, display_detections)
+                display_counts = self._compute_counts(display_detections)
                 annotated = annotate_frame(
                     frame,
                     display_detections,
-                    stats_lines=self._stats_lines(entry.profile, display_counts),
+                    stats_lines=self._stats_lines(display_counts),
                     show_alert_sent=show_alert,
                 )
                 resized = cv2.resize(annotated, (640, 480))
@@ -533,26 +473,39 @@ class CameraManager:
                         )
                         for d in detections[:12]
                     ]
-                    hybrid_stats = getattr(detector, "last_stats", None)
-                    cycle_fps = 1000 / max(entry.last_processing_ms, 1)
                     logger.info(
-                        "cam=%d profile=%s dets=%s hybrid=%s inference_ms=%.1f "
-                        "cycle_ms=%.1f cycle_fps=%.1f",
+                        "cam=%d dets=%s inference_ms=%.1f cycle_ms=%.1f",
                         camera_id,
-                        entry.profile,
                         sample,
-                        hybrid_stats.as_dict() if hybrid_stats else "n/a",
                         entry.last_inference_ms,
                         entry.last_processing_ms,
-                        cycle_fps,
                     )
 
                 await asyncio.sleep(0)
 
         except asyncio.CancelledError:
-            pass
+            cancelled = True
         except Exception as exc:
-            logger.exception("Error in camera %d processing loop: %s", camera_id, exc)
+            logger.error("Camera %d processing failed (%s)", camera_id, type(exc).__name__)
+        finally:
+            checker.reset(camera_id)
+            await entry.source.release()
+            if not cancelled:
+                await self._mark_inactive(camera_id)
+
+    @staticmethod
+    async def _mark_inactive(camera_id: int) -> None:
+        from app.db.models import Camera
+        from app.db.session import AsyncSessionLocal
+
+        try:
+            async with AsyncSessionLocal() as session:
+                camera = await session.get(Camera, camera_id)
+                if camera:
+                    camera.is_active = False
+                    await session.commit()
+        except Exception:
+            logger.warning("Could not mark completed camera %d inactive", camera_id)
 
     # ------------------------------------------------------------------
     # Cleanup

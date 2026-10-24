@@ -45,7 +45,6 @@ async def test_initial_password_change_revokes_old_session(anon_client, db_sessi
     user = User(
         username="temporary-user",
         password_hash=hash_password("TempPass!2026-First"),
-        sector="construction",
         role="viewer",
         must_change_password=True,
         is_active=True,

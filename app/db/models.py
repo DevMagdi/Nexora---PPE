@@ -20,9 +20,6 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    sector: Mapped[str] = mapped_column(
-        String(20), default="construction", nullable=False
-    )  # construction|medical|both
     role: Mapped[str] = mapped_column(String(20), default="viewer", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -45,7 +42,19 @@ class AuditLog(Base):
     target_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False, index=True
+    )
+
+
+class Site(Base):
+    __tablename__ = "sites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    location: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class Camera(Base):
@@ -53,11 +62,11 @@ class Camera(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # webcam | rtsp | file
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # rtsp | file
     source_uri: Mapped[str] = mapped_column(String(500), nullable=False)
-    profile: Mapped[str] = mapped_column(
-        String(20), default="construction", nullable=False
-    )  # construction|medical
+    site_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("sites.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     enabled_classes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)

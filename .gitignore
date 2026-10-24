@@ -50,11 +50,11 @@ violation_frames/
 no_hardhat_frame.jpg
 nexora_core_code.txt
 
-# ── ML Training & Datasets (keep only production weights in Model/) ──
+# ── Deployment weights & datasets (installed separately) ──
 dataset/
 runs/
 Model/باكب/
-yolov8n.pt
+*.pt
 
 # ── Frontend ──────────────────────────────────────────────────
 !frontend/src/lib/
@@ -72,3 +72,10 @@ frontend/.vite/
 *.swo
 .DS_Store
 Thumbs.db
+
+/uploads/
+/test-results/
+/playwright-report/
+
+/frontend/test-results/
+/frontend/playwright-report/

@@ -47,7 +47,6 @@ def _user_response(user: User) -> UserResponse:
     return UserResponse(
         id=user.id,
         username=user.username,
-        sector=user.sector,
         role=user.role,
         is_active=user.is_active,
         must_change_password=user.must_change_password,
@@ -158,7 +157,8 @@ async def login(
         if user is not None:
             recent_failure = (
                 user.last_failed_login_at is not None
-                and now - user.last_failed_login_at <= timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+                and now - user.last_failed_login_at
+                <= timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
             )
             user.failed_login_attempts = user.failed_login_attempts + 1 if recent_failure else 1
             user.last_failed_login_at = now
@@ -233,7 +233,6 @@ async def me(user: User = Depends(get_authenticated_user)):
     return MeResponse(
         id=user.id,
         username=user.username,
-        sector=user.sector,
         role=user.role,
         must_change_password=user.must_change_password,
     )
@@ -265,7 +264,9 @@ async def change_password(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if verify_password(body.new_password, user.password_hash):
-        raise HTTPException(status_code=422, detail="New password must be different from the current password")
+        raise HTTPException(
+            status_code=422, detail="New password must be different from the current password"
+        )
 
     user.password_hash = hash_password(body.new_password)
     user.must_change_password = False
@@ -293,8 +294,6 @@ async def list_users(
     admin: User = Depends(require_roles("admin")),
 ):
     query = select(User)
-    if admin.sector != "both":
-        query = query.where(User.sector == admin.sector)
     result = await db.execute(query.order_by(User.id))
     return [_user_response(user) for user in result.scalars().all()]
 
@@ -307,8 +306,6 @@ async def create_user(
     admin: User = Depends(require_roles("admin")),
 ):
     username = body.username.strip().casefold()
-    if admin.sector != "both" and body.sector != admin.sector:
-        raise HTTPException(status_code=403, detail="Cannot issue an account outside your sector")
     existing = await db.execute(select(User.id).where(func.lower(User.username) == username))
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="Username already exists")
@@ -317,7 +314,6 @@ async def create_user(
     user = User(
         username=username,
         password_hash=hash_password(password),
-        sector=body.sector,
         role=body.role,
         is_active=True,
         must_change_password=True,
@@ -331,7 +327,7 @@ async def create_user(
         actor_user_id=admin.id,
         target_type="user",
         target_id=user.id,
-        details={"role": user.role, "sector": user.sector},
+        details={"role": user.role},
     )
     await db.commit()
     await db.refresh(user)
@@ -350,21 +346,13 @@ async def update_user(
     user = await db.get(User, user_id, with_for_update=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    if admin.sector != "both":
-        if user.sector != admin.sector:
-            raise HTTPException(status_code=404, detail="User not found")
-        if body.sector is not None and body.sector != admin.sector:
-            raise HTTPException(status_code=403, detail="Cannot assign access outside your sector")
-    if user.role == "admin" and body.sector is not None and body.sector != user.sector:
-        raise HTTPException(status_code=403, detail="Administrator sector changes are reserved for the local CLI")
     if user.id == admin.id and (body.is_active is False or body.role not in (None, "admin")):
-        raise HTTPException(status_code=400, detail="You cannot deactivate or demote your own admin account")
+        raise HTTPException(
+            status_code=400, detail="You cannot deactivate or demote your own admin account"
+        )
 
     was_admin = user.role == "admin"
     changes: list[str] = []
-    if body.sector is not None and body.sector != user.sector:
-        user.sector = body.sector
-        changes.append("sector")
     if body.role is not None and body.role != user.role:
         user.role = body.role
         changes.append("role")
@@ -373,19 +361,17 @@ async def update_user(
         changes.append("is_active")
 
     if was_admin and (user.role != "admin" or not user.is_active):
-        scope = [User.sector == "both"]
-        if user.sector != "both":
-            scope.append(User.sector == user.sector)
         admins = await db.execute(
             select(func.count(User.id)).where(
                 User.role == "admin",
                 User.is_active.is_(True),
                 User.id != user.id,
-                *scope,
             )
         )
         if admins.scalar_one() < 1:
-            raise HTTPException(status_code=409, detail="At least one active administrator must remain")
+            raise HTTPException(
+                status_code=409, detail="At least one active administrator must remain"
+            )
 
     if changes:
         user.token_version += 1
@@ -412,8 +398,6 @@ async def reset_user_password(
 ):
     user = await db.get(User, user_id, with_for_update=True)
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    if admin.sector != "both" and user.sector != admin.sector:
         raise HTTPException(status_code=404, detail="User not found")
     password = _generate_user_password(user.username)
     user.password_hash = hash_password(password)
@@ -443,8 +427,6 @@ async def get_audit_log(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_roles("admin")),
 ):
-    if admin.sector != "both":
-        raise HTTPException(status_code=403, detail="System-wide audit access requires a both-sector administrator")
     if page < 1 or page_size < 1 or page_size > 200:
         raise HTTPException(status_code=422, detail="Invalid pagination values")
     result = await db.execute(

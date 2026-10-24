@@ -230,8 +230,7 @@ def discover_pure_python_modules(
                 continue
             stem = filename[: -len(".py")]
             has_compiled_twin = any(
-                other.startswith(stem) and other.endswith(extension_suffixes)
-                for other in filenames
+                other.startswith(stem) and other.endswith(extension_suffixes) for other in filenames
             )
             if not has_compiled_twin:
                 continue

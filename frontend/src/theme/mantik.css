@@ -1,0 +1,46 @@
+/* MANTIK identity: the only supported palette. No alternate/light mode. */
+:root {
+  color-scheme: dark;
+  --navy: #16283f;
+  --navy-deep: #111b2b;
+  --navy-panel: #1c2b40;
+  --gold: #c9a227;
+  --gold-soft: #d4af37;
+  --gold-muted: #b8963e;
+  --text: #f5f5f5;
+  --text-soft: #e8e8e8;
+  --text-muted: #a8b0bc;
+  --gold-border: rgba(201, 162, 39, 0.25);
+
+  --background: var(--navy);
+  --foreground: var(--text);
+  --card: var(--navy-panel);
+  --card-foreground: var(--text-soft);
+  --popover: var(--navy-deep);
+  --popover-foreground: var(--text);
+  --primary: var(--gold);
+  --primary-foreground: var(--navy-deep);
+  --secondary: var(--navy-deep);
+  --secondary-foreground: var(--gold-soft);
+  --muted: var(--navy-deep);
+  --muted-foreground: var(--text-muted);
+  --accent: rgba(201, 162, 39, 0.1);
+  --accent-foreground: var(--gold-soft);
+  --border: var(--gold-border);
+  --input: var(--gold-border);
+  --ring: var(--gold);
+  --success: #7eb394;
+  --success-light: rgba(126, 179, 148, 0.12);
+  --destructive: #ef7777;
+  --destructive-foreground: var(--navy-deep);
+  --destructive-light: rgba(239, 119, 119, 0.12);
+  --chart-gold: var(--gold);
+  --chart-soft: var(--gold-soft);
+  --chart-muted: var(--gold-muted);
+  --chart-neutral: var(--text-muted);
+  --chart-grid: var(--gold-border);
+  --chart-axis: var(--text-muted);
+  --shadow-card: 0 8px 24px rgba(17, 27, 43, 0.22);
+  --shadow-floating: 0 24px 80px rgba(17, 27, 43, 0.7);
+  --radius: 0.85rem;
+}

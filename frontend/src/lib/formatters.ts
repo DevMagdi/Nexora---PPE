@@ -1,240 +1,104 @@
-import type { CameraProfile, LiveCounts, LiveMetricItem, LiveStatus, TabKey, ToneKey } from "@/types"
+import type { LiveCounts, RuleKey, SiteKind, TabKey, UserRole } from "@/types"
 
 export const LOCALE = "ar-EG-u-nu-latn"
-export const HOUR = 3_600_000
-export const DAY = 24 * HOUR
-export const VIOLATIONS_FETCH_LIMIT = 200
-export const TABLE_PAGE_SIZE = 25
-export const MAX_GRID_PREVIEWS = 4
-
-export const CHART_HEX = {
-  green: "var(--chart-green)",
-  red: "var(--chart-red)",
-  amber: "var(--chart-amber)",
-  blue: "var(--chart-blue)",
-  purple: "var(--chart-purple)",
-}
-
-export const PIE_COLORS = [
-  CHART_HEX.green,
-  CHART_HEX.blue,
-  CHART_HEX.amber,
-  CHART_HEX.purple,
-  CHART_HEX.red,
-]
-
-export const SECTOR_LABEL: Record<string, string> = {
-  construction: "قطاع الإنشاءات",
-  medical: "القطاع الطبي",
-  both: "إدارة عامة",
-}
-
-export const PROFILE_LABEL: Record<string, string> = {
-  construction: "إنشاءات",
-  medical: "طبي",
-}
-
-export const SOURCE_TYPE_SHORT: Record<string, string> = {
-  webcam: "كاميرا ويب",
-  rtsp: "بث RTSP",
-  file: "ملف فيديو",
-}
-
-export const ROLE_LABEL: Record<string, string> = {
+export const ROLE_LABEL: Record<UserRole, string> = {
   admin: "مدير النظام",
-  operator: "مشغّل",
-  viewer: "مشاهد فقط",
+  supervisor: "مشرف السلامة",
+  viewer: "مشاهد",
 }
-
-export const LIVE_STATUS_LABEL: Record<LiveStatus, string> = {
-  idle: "",
-  connecting: "جارٍ الاتصال...",
-  reconnecting: "إعادة الاتصال...",
-  open: "مباشر",
+export const SITE_LABEL: Record<SiteKind, string> = {
+  factory: "مصنع",
+  construction: "موقع إنشاء",
+  workshop: "ورشة صناعية",
+  warehouse: "مستودع",
+  industrial: "منطقة صناعية",
 }
-
-export const CORE_KEYWORDS = ["hardhat", "helmet", "vest", "mask", "glove", "cap", "goggle", "boot", "coat"]
-
-export const VIOLATION_LABELS: Record<string, string> = {
-  nohardhat: "بدون خوذة",
-  nohelmet: "بدون خوذة",
-  nosafetyvest: "بدون سترة عاكسة",
-  novest: "بدون سترة عاكسة",
-  nomask: "بدون كمامة",
-  nogloves: "بدون قفازات",
-  nohandgloves: "بدون قفازات",
-  nogoggles: "بدون نظارات واقية",
-  nogoggle: "بدون نظارات واقية",
-  nosafetyboots: "بدون حذاء أمان",
-  noboots: "بدون حذاء أمان",
-  nolabcoat: "بدون بالطو واقي",
-  nocoat: "بدون بالطو واقي",
-  noheadcap: "بدون غطاء رأس",
-  nocap: "بدون غطاء رأس",
+export const RULE_LABEL: Record<RuleKey, string> = {
+  helmet: "خوذة أمان",
+  vest: "سترة عاكسة",
+  gloves: "قفازات عمل",
+  boots: "حذاء أمان",
+  goggles: "نظارات واقية",
 }
-
 export const TAB_TITLES: Record<TabKey, string> = {
   overview: "نظرة عامة",
   live: "المراقبة المباشرة",
   cameras: "إدارة الكاميرات",
-  violations: "سجل المخالفات",
+  uploads: "تحليل الصور والفيديو",
+  violations: "التنبيهات وسجل الأحداث",
+  sites: "المصانع والمواقع",
+  users: "المستخدمون والأدوار",
 }
-
-export const TONE_CLASSES: Record<ToneKey, { chip: string; text: string; border: string }> = {
-  primary: { chip: "bg-primary-light", text: "text-primary", border: "border-primary/20" },
-  info: { chip: "bg-info-light", text: "text-info-foreground", border: "border-info/20" },
-  warning: { chip: "bg-warning-light", text: "text-warning-foreground", border: "border-warning/20" },
-  destructive: { chip: "bg-destructive-light", text: "text-destructive-foreground", border: "border-destructive/20" },
-  success: { chip: "bg-success-light", text: "text-success-foreground", border: "border-success/20" },
+export const NEGATIVE_LABELS: Record<string, string> = {
+  "NO-Hardhat": "بدون خوذة أمان",
+  "NO-Safety Vest": "بدون سترة عاكسة",
+  "NO-Gloves": "بدون قفازات عمل",
+  "NO-Boot": "بدون حذاء أمان",
+  "NO-Goggles": "بدون نظارات واقية",
 }
-
-export function cameraProfile(c: { profile?: string } | null | undefined): CameraProfile {
-  return c?.profile === "medical" ? "medical" : "construction"
+const CLASS_LABELS: Record<string, string> = {
+  ...NEGATIVE_LABELS,
+  Person: "عامل",
+  Hardhat: "خوذة أمان",
+  "Safety Vest": "سترة عاكسة",
+  Gloves: "قفازات عمل",
+  "Safety Boots": "حذاء أمان",
+  Goggles: "نظارات واقية",
 }
-
-export function isCoreType(type: unknown): boolean {
-  const value = typeof type === "string" ? type.toLowerCase() : ""
-  return CORE_KEYWORDS.some((keyword) => value.includes(keyword))
+export const CHART_COLORS = [
+  "var(--chart-gold)",
+  "var(--chart-soft)",
+  "var(--chart-muted)",
+  "var(--chart-neutral)",
+  "var(--success)",
+]
+export function classLabel(value: string): string {
+  return CLASS_LABELS[value] ?? "فئة غير مدعومة"
 }
-
-export function normalizeViolationKey(type: unknown): string {
-  const value = typeof type === "string" ? type : ""
-  return value.toLowerCase().replace(/[^a-z]/g, "")
+export function parseTs(value: string): Date {
+  const trimmed = String(value ?? "").trim()
+  if (!trimmed) return new Date(NaN)
+  return new Date(/Z$|[+-]\d{2}:?\d{2}$/.test(trimmed) ? trimmed : trimmed.replace(" ", "T") + "Z")
 }
-
-export function violationLabel(type: unknown, ppeLabels: ReadonlyMap<string, string>): string {
-  const value = typeof type === "string" ? type.trim() : ""
-  const key = normalizeViolationKey(value)
-  return (
-    VIOLATION_LABELS[key]
-    ?? (ppeLabels.get(value)?.trim() || value.replace(/[_-]+/g, " ") || "غير محدد")
-  )
+export function formatDate(value: string): string {
+  const date = parseTs(value)
+  return Number.isNaN(+date)
+    ? "—"
+    : date.toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" })
 }
-
-/**
- * Aggregate chart entries by their displayed label, not the model's raw class name.
- * Construction and medical models use different spellings for the same PPE class
- * (for example `NO-Mask` and `no mask`), which otherwise creates duplicate React keys
- * and visually splits a single violation across multiple pie slices.
- */
-export function aggregateViolationPieData(
-  violations: readonly ({ violation_type?: unknown } | null | undefined)[] | null | undefined,
-  ppeLabels: ReadonlyMap<string, string>,
-  limit = 5,
-): { name: string; value: number }[] {
-  const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 5
-  if (safeLimit === 0) return []
-
-  const counts = new Map<string, number>()
-  for (const violation of violations ?? []) {
-    const name = violationLabel(violation?.violation_type, ppeLabels)
-    counts.set(name, (counts.get(name) ?? 0) + 1)
-  }
-
-  return [...counts.entries()]
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    .slice(0, safeLimit)
+export function formatTime(value: string): string {
+  const date = parseTs(value)
+  return Number.isNaN(+date)
+    ? "—"
+    : date.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })
 }
-
-/**
- * الباك بيخزّن utc_now() كـ naive UTC من غير Z.
- * JS بيقرأ "2026-10-11T16:33:00" كـ local، فبنفرض UTC لو مفيش timezone.
- */
-export function parseTs(ts: string): Date {
-  const s = String(ts ?? "").trim()
-  if (!s) return new Date(NaN)
-  if (/Z$|[+-]\d{2}:?\d{2}$/.test(s)) return new Date(s)
-  return new Date(s.replace(" ", "T") + "Z")
+export function num(value: number | undefined): string {
+  return value === undefined ? "—" : value.toLocaleString(LOCALE)
 }
-
-export function iso(d: Date): string {
-  return d.toISOString()
-}
-
-export function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })
-}
-
-export function formatDate(ts: string): string {
-  return parseTs(ts).toLocaleDateString(LOCALE, { day: "2-digit", month: "short", year: "numeric" })
-}
-
-export function formatTime(ts: string): string {
-  return parseTs(ts).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-}
-
-const relativeFormatter = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" })
-export function formatRelative(ts: string, now: number): string {
-  const diffSec = (parseTs(ts).getTime() - now) / 1000
-  const abs = Math.abs(diffSec)
-  if (abs < 45) return "الآن"
-  if (abs < 3600) return relativeFormatter.format(Math.round(diffSec / 60), "minute")
-  if (abs < 86400) return relativeFormatter.format(Math.round(diffSec / 3600), "hour")
-  return relativeFormatter.format(Math.round(diffSec / 86400), "day")
-}
-
-export function maskUri(uri?: string | null): string {
-  if (!uri) return ""
-  return uri.replace(/\/\/([^@/]+)@/, "//•••@")
-}
-
-function n(v: unknown): number | undefined {
-  const x = Number(v)
-  return Number.isFinite(x) ? x : undefined
-}
-
-/** يوحّد payload الـ WS (مفاتيح الباك الحالية + القديمة) */
 export function normalizeLiveCounts(raw: unknown): LiveCounts | null {
-  if (!raw || typeof raw !== "object") return null
-  const d = raw as Record<string, unknown>
-  if (d.ping) return null
-  return {
-    hardhat: n(d.hardhat ?? d.hardhat_count),
-    vest: n(d.vest ?? d.vest_count),
-    person: n(d.person ?? d.person_count),
-    no_mask: n(d.no_mask),
-    no_gloves: n(d.no_gloves),
-    no_goggles: n(d.no_goggles),
-    no_cap: n(d.no_cap),
-    skin_hits: n(d.skin_hits),
-    total: n(d.total ?? d.total_detections),
-  }
-}
-
-export function computeCompliance(profile: string | undefined, c: LiveCounts): number | undefined {
-  if (profile === "medical") return undefined
-  const persons = c.person ?? 0
-  if (persons <= 0 || c.hardhat === undefined) return undefined
-  return Math.round(Math.min(1, c.hardhat / persons) * 100)
-}
-
-export function liveMetrics(profile: string | undefined, c: LiveCounts): LiveMetricItem[] {
-  if (profile === "medical") {
-    return [
-      { value: c.no_mask, label: "بدون كمامة" },
-      { value: c.no_gloves, label: "بدون قفازات" },
-      { value: c.no_goggles, label: "بدون نظارات واقية" },
-      { value: c.no_cap, label: "بدون غطاء رأس" },
-      { value: c.total, label: "إجمالي الكشف" },
-    ]
-  }
-  return [
-    { value: c.person, label: "أشخاص" },
-    { value: c.hardhat, label: "خوذات" },
-    { value: c.vest, label: "سترات" },
+  if (!raw || typeof raw !== "object" || "ping" in raw) return null
+  const keys: (keyof LiveCounts)[] = [
+    "person",
+    "hardhat",
+    "no_hardhat",
+    "vest",
+    "no_vest",
+    "gloves",
+    "no_gloves",
+    "boots",
+    "no_boot",
+    "goggles",
+    "no_goggles",
+    "total",
   ]
-}
-
-export function withParams(url: string, params: Record<string, string | undefined>): string {
-  try {
-    const isAbsolute = /^[a-z][a-z\d+.-]*:/i.test(url)
-    const u = new URL(url, window.location.origin)
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== "") u.searchParams.set(k, v)
-    }
-    return isAbsolute ? u.toString() : `${u.pathname}${u.search}${u.hash}`
-  } catch {
-    return url
-  }
+  const record = raw as Record<string, unknown>
+  if (!keys.some((key) => typeof record[key] === "number")) return null
+  return Object.fromEntries(
+    keys.map((key) => [
+      key,
+      typeof record[key] === "number" && Number.isFinite(record[key]) && record[key] >= 0
+        ? Math.floor(record[key])
+        : 0,
+    ]),
+  ) as unknown as LiveCounts
 }

@@ -1,7 +1,7 @@
 [project]
 name = "Nexora"
-version = "3.0.0"
-description = "Real-time PPE compliance monitoring platform for Construction & Medical sectors"
+version = "4.0.0"
+description = "Industrial PPE monitoring for factories, construction sites, workshops and warehouses"
 requires-python = ">=3.11"
 
 [tool.ruff]
@@ -21,7 +21,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-v --tb=short"
 markers = [
-    "slow: heavy real-inference tests on the bundled weights (skip with -m 'not slow')",
+    "slow: deployment tests requiring the separately provisioned approved checkpoint",
 ]
 filterwarnings = [
     "ignore:'crypt' is deprecated:DeprecationWarning:passlib.*",

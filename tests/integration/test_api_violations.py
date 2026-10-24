@@ -6,9 +6,8 @@ from app.db.models import Camera, Violation
 async def _seed_camera(db_session):
     cam = Camera(
         name="Test Cam",
-        source_type="webcam",
-        source_uri="0",
-        profile="construction",
+        source_type="rtsp",
+        source_uri="rtsp://192.168.10.20/live",
         enabled_classes=["helmet", "vest"],
     )
     db_session.add(cam)
@@ -88,9 +87,8 @@ async def test_camera_crud_lifecycle(test_client):
         "/api/v1/cameras",
         json={
             "name": "Gate Camera",
-            "source_type": "webcam",
-            "source_uri": "0",
-            "profile": "construction",
+            "source_type": "rtsp",
+            "source_uri": "rtsp://192.168.10.20/live",
             "enabled_classes": ["helmet", "vest"],
         },
     )

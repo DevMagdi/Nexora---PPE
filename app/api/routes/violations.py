@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -10,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user, require_roles
+from app.core.ppe import PPE_CLASSES
 from app.core.rate_limit import get_client_ip
 from app.db.audit import add_audit_event, hash_identifier
 from app.db.models import Camera, User, Violation, utc_now
@@ -42,7 +44,19 @@ def _to_response(v: Violation) -> ViolationResponse:
     )
 
 
-def _apply_filters(q, camera_id, violation_type, from_dt, to_dt):
+def _apply_filters(q, camera_id, violation_type, from_dt, to_dt, site_id=None, event_status="all"):
+    if from_dt and to_dt and _to_naive_utc(from_dt) > _to_naive_utc(to_dt):
+        raise HTTPException(status_code=422, detail="The start time must not be after the end time")
+    if violation_type is not None and violation_type not in {
+        rule["negative"] for rule in PPE_CLASSES.values()
+    }:
+        raise HTTPException(status_code=422, detail="Unsupported industrial violation type")
+    if site_id is not None:
+        q = q.where(Camera.site_id == site_id)
+    if event_status == "open":
+        q = q.where(Violation.resolved_at.is_(None))
+    elif event_status == "resolved":
+        q = q.where(Violation.resolved_at.is_not(None))
     if camera_id is not None:
         q = q.where(Violation.camera_id == camera_id)
     if violation_type is not None:
@@ -54,12 +68,6 @@ def _apply_filters(q, camera_id, violation_type, from_dt, to_dt):
     return q
 
 
-def _apply_sector(q, user: User):
-    if user.sector != "both":
-        q = q.where(Camera.profile == user.sector)
-    return q
-
-
 def _spreadsheet_safe(value):
     if isinstance(value, str) and value[:1] in {"=", "+", "-", "@", "\t", "\r"}:
         return "'" + value
@@ -68,7 +76,9 @@ def _spreadsheet_safe(value):
 
 @router.get("", response_model=ViolationListResponse)
 async def list_violations(
-    camera_id: int | None = Query(None),
+    camera_id: int | None = Query(None, gt=0),
+    site_id: int | None = Query(None, gt=0),
+    event_status: Literal["all", "open", "resolved"] = Query("all", alias="status"),
     violation_type: str | None = Query(None),
     from_dt: datetime | None = Query(None, alias="from"),
     to_dt: datetime | None = Query(None, alias="to"),
@@ -77,9 +87,9 @@ async def list_violations(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = _apply_sector(select(Violation).join(Camera, Camera.id == Violation.camera_id), user)
-    q = q.order_by(Violation.timestamp.desc())
-    q = _apply_filters(q, camera_id, violation_type, from_dt, to_dt)
+    q = select(Violation).join(Camera, Camera.id == Violation.camera_id)
+    q = q.order_by(Violation.timestamp.desc(), Violation.id.desc())
+    q = _apply_filters(q, camera_id, violation_type, from_dt, to_dt, site_id, event_status)
 
     count_q = select(func.count()).select_from(q.subquery())
     total = (await db.execute(count_q)).scalar_one()
@@ -95,22 +105,32 @@ async def list_violations(
 
 @router.get("/export")
 async def export_violations(
-    camera_id: int | None = Query(None),
+    camera_id: int | None = Query(None, gt=0),
+    site_id: int | None = Query(None, gt=0),
+    event_status: Literal["all", "open", "resolved"] = Query("all", alias="status"),
     violation_type: str | None = Query(None),
     from_dt: datetime | None = Query(None, alias="from"),
     to_dt: datetime | None = Query(None, alias="to"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = _apply_sector(select(Violation).join(Camera, Camera.id == Violation.camera_id), user)
-    q = q.order_by(Violation.timestamp.desc())
-    q = _apply_filters(q, camera_id, violation_type, from_dt, to_dt)
+    q = select(Violation).join(Camera, Camera.id == Violation.camera_id)
+    q = q.order_by(Violation.timestamp.desc(), Violation.id.desc())
+    q = _apply_filters(q, camera_id, violation_type, from_dt, to_dt, site_id, event_status)
     violations = (await db.execute(q)).scalars().all()
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
-        ["id", "camera_id", "violation_type", "confidence", "timestamp", "resolved_at", "frame_path"]
+        [
+            "id",
+            "camera_id",
+            "violation_type",
+            "confidence",
+            "timestamp",
+            "resolved_at",
+            "frame_path",
+        ]
     )
     for violation in violations:
         writer.writerow(
@@ -144,8 +164,6 @@ async def _get_scoped_violation(violation_id: int, db: AsyncSession, user: User)
     camera = await db.get(Camera, violation.camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Violation not found")
-    if user.sector != "both" and camera.profile != user.sector:
-        raise HTTPException(status_code=404, detail="Violation not found")
     return violation
 
 
@@ -163,7 +181,7 @@ async def resolve_violation(
     violation_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles("admin", "operator")),
+    user: User = Depends(require_roles("admin", "supervisor")),
 ):
     violation = await _get_scoped_violation(violation_id, db, user)
     if violation.resolved_at is None:

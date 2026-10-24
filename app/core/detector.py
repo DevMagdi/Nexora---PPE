@@ -1,85 +1,23 @@
 from __future__ import annotations
 
 import hashlib
-import os
+import math
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.ppe import canonical_class_name
+from app.core.model_policy import MODEL_FILENAME, validate_model_path
+from app.core.ppe import canonical_class_name, is_negative_class
 
 logger = get_logger(__name__)
-
-# أزواج الفئات الموجبة/السالبة لمنع انعكاس عتبات الثقة (موجب أعلى من سالب)
-_POSITIVE_TO_NEGATIVE_CANONICAL: dict[str, str] = {
-    "Hardhat": "NO-Hardhat",
-    "Safety Vest": "NO-Safety Vest",
-    "Mask": "NO-Mask",
-    "Gloves": "NO-Gloves",
-    "Safety Boots": "NO-Safety Boots",
-    "Goggles": "NO-Goggles",
-    "Head Cap": "NO-Head Cap",
-}
-
-# مصادر الكشف: النماذج (`model:*`) أو طبقة الذكاء الجلدي (`skin:*`)
-SOURCE_MODEL = "model"
-SOURCE_SKIN_PREFIX = "skin:"
-
-
-def is_skin_source(source: str | None) -> bool:
-    """
-    هل الكشف ده **مولَّد** من فلتر الجلد (distanceTransform / جسر العينين / الفم)؟
-
-    مهم نستخدم ``startswith`` مش مجرد بحث عن ``skin:`` — لأن الكشف الموديلي
-    اللي اتأكّد بالجلد بياخد source مثل ``model:construction+skin:mouth``،
-    وده فنيًا كشف موديل مؤكَّد وثقته كاملة في منطق المخالفات، مش كشف صناعي.
-    """
-    return bool(source) and source.startswith(SOURCE_SKIN_PREFIX)
-
-
-# ألوان (نغطي construction + medical names)
-CLASS_COLORS_BY_NAME = {
-    # Construction
-    "Hardhat": (255, 0, 0),
-    "NO-Hardhat": (0, 0, 255),
-    "Safety Vest": (0, 255, 255),
-    "NO-Safety Vest": (255, 0, 255),
-    "Mask": (0, 255, 0),
-    "NO-Mask": (255, 255, 0),
-    "Person": (200, 200, 200),
-    "Gloves": (255, 165, 0),
-    "NO-Gloves": (255, 80, 0),
-    "Safety Boots": (100, 200, 255),
-    "NO-Safety Boots": (80, 120, 255),
-    "Goggles": (180, 255, 180),
-    "NO-Goggles": (120, 220, 120),
-    # Medical (lowercase)
-    "mask": (0, 255, 0),
-    "no mask": (0, 0, 255),
-    "hand gloves": (255, 165, 0),
-    "no hand gloves": (0, 0, 255),
-    "head cap": (0, 255, 255),
-    "no head cap": (0, 0, 255),
-    "goggle": (180, 255, 180),
-    "no goggle": (120, 220, 120),
-    "lab coat": (255, 0, 255),
-    "full cover": (255, 255, 255),
-    "shoe cover": (100, 200, 255),
-    # Canonical (hybrid) names
-    "Head Cap": (0, 255, 255),
-    "NO-Head Cap": (0, 0, 255),
-    "Lab Coat": (255, 0, 255),
-    "Full Cover": (255, 255, 255),
-    "Shoe Cover": (100, 200, 255),
-}
-
-# ألوان الكشوف المولّدة من فلتر الجلد/الجسر (هجين)
-CLASS_COLORS_BY_NAME.setdefault("NO-Goggles", (80, 200, 255))
-CLASS_COLORS_BY_NAME.setdefault("NO-Mask", (60, 60, 255))
-CLASS_COLORS_BY_NAME.setdefault("NO-Gloves", (255, 120, 40))
+# OpenCV uses BGR. Gold equipment, neutral people, red violations.
+GOLD_BGR = (39, 162, 201)
+TEXT_BGR = (232, 232, 232)
+DANGER_BGR = (85, 85, 229)
 
 
 @dataclass
@@ -91,454 +29,123 @@ class Detection:
     y1: int
     x2: int
     y2: int
-    color: tuple[int, int, int]
-    # مصدر الكشف: "model" أو "skin:eye_bridge" / "skin:mouth" / "skin:distance_transform"
+    color: tuple[int, int, int] = GOLD_BGR
     source: str = "model"
 
 
-# ---------------------------------------------------------------------------
-# Safe weight migration
-# ---------------------------------------------------------------------------
-# أوزان قديمة تم رفدها: ممنوع تحميلها تاني تحت أي ظرف (إعداد قديم في .env،
-# fallback منسّي، أو صورة Docker قديمة). أي مسار بيطابقها بيتحوّل تلقائيًا
-# للبديل المعتمد، فإعدادات المستخدمين القديمة تكمل شغل من غير تدخل يدوي.
-RETIRED_MODEL_PATHS: tuple[str, ...] = (
-    "Model/bestMedicalModel2.pt",
-    # 2026-10-12: الوزن الطبي القديم اترفد لصالح bestMedicalModel_FINAL.pt
-    # (recall و mAP أعلى، ونفس ترتيب الفئات بالكامل).
-    "Model/bestMedicalModel.pt",
-)
-
-# خريطة الترحيل: وزن مرفود -> البديل المعتمد
-MODEL_MIGRATIONS: dict[str, str] = {
-    "Model/bestMedicalModel2.pt": "Model/bestMedicalModel_FINAL.pt",
-    "Model/bestMedicalModel.pt": "Model/bestMedicalModel_FINAL.pt",
-}
-
-# أوزان مرفودة البديل بتاعها بيحافظ على **نفس** ترتيب وأرقام الفئات (class ids).
-# في الحالة دي خريطة عتبات الثقة لكل فئة اللي ضبطها المستخدم تفضل صحيحة بعد
-# الترحيل، وبالتالي ممنوع تتشال. أي وزن مرفود مش موجود هنا (زي
-# ``bestMedicalModel2.pt``) ترتيب فئاته مختلف، فتتشال خريطته القديمة بالكامل.
-CLASS_ID_COMPATIBLE_RETIRED_PATHS: frozenset[str] = frozenset({"Model/bestMedicalModel.pt"})
-
-
-def _normalize_model_path(path: str | None) -> str:
-    """مفتاح مقارنة موحّد لمسار الموديل (بدون اختلافات \\ أو ./ أو //)."""
-    return os.path.normpath((path or "").strip().replace("\\", "/"))
-
-
-def is_retired_model_path(path: str | None) -> bool:
-    """
-    هل المسار ده وزن مرفود؟
-
-    المطابقة بالاسم الأساسي (basename) كمان، لأن الوزن نفسه هو المرفود —
-    مش مكانه على الـ Disk — فأي نسخة منه في أي فولدر مرفوضة.
-    """
-    if not path:
-        return False
-    normalized = _normalize_model_path(path)
-    retired_normalized = {_normalize_model_path(p) for p in RETIRED_MODEL_PATHS}
-    retired_basenames = {os.path.basename(_normalize_model_path(p)) for p in RETIRED_MODEL_PATHS}
-    return normalized in retired_normalized or os.path.basename(normalized) in retired_basenames
-
-
-def migrate_model_path(path: str) -> str:
-    """يرحّل أي وزن مرفود لبديله المعتمد (مع تحذير في اللوج)، وغير كده يرجع المسار زي ما هو."""
-    if not is_retired_model_path(path):
-        return path
-    for retired, replacement in MODEL_MIGRATIONS.items():
-        if _normalize_model_path(retired) == _normalize_model_path(path) or os.path.basename(
-            _normalize_model_path(retired)
-        ) == os.path.basename(_normalize_model_path(path)):
-            logger.warning(
-                "Model weight '%s' is retired; migrating to '%s'",
-                path,
-                replacement,
-            )
-            return replacement
+def require_model_file(model_path: str | None = None) -> Path:
+    path = validate_model_path(model_path or settings.PPE_MODEL_PATH)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Required industrial weights are missing: {path}. Install the approved "
+            f"{MODEL_FILENAME} artifact, then run `python -m app.model_check`. "
+            "Inference is disabled; no fallback or automatic download is permitted."
+        )
+    if path.stat().st_size == 0:
+        raise RuntimeError(
+            f"The approved weights at {path} are empty; re-copy the complete artifact"
+        )
     return path
 
 
-def migration_preserves_class_ids(path: str | None) -> bool:
-    """
-    هل ترحيل المسار ده بيحافظ على أرقام/ترتيب الفئات؟
-
-    ``True`` يعني إن البديل المعتمد ليه نفس ترتيب الفئات تمامًا، فخريطة عتبات
-    الثقة لكل فئة (لو المستخدم ضبطها) تفضل سارية بعد الترحيل ومش لازم تتشال.
-    """
-    if not path:
-        return False
-    normalized = _normalize_model_path(path)
-    return any(
-        _normalize_model_path(p) == normalized
-        or os.path.basename(_normalize_model_path(p)) == os.path.basename(normalized)
-        for p in CLASS_ID_COMPATIBLE_RETIRED_PATHS
-    )
-
-
-def _load_yolo_weights(YOLO, resolved_path: str, *, setting_name: str = ""):
-    """
-    يحمّل الأوزان وبيحوّل أي فشل تحميل لرسالة تشغيلية واضحة.
-
-    لوج حقيقي (2026-10-12) طلّع ``OSError: [Errno 22] Invalid argument`` لما
-    ``.pt`` كان مبتور (ترانسفير ناقص أو نسخة قديمة). الرسالة دي مش بتقول للمشغّل
-    لا الملف ولا السبب. هنا بنفحص إن الملف مش فاضي ونغلّف خطأ ultralytics
-    برسالة فيها المسار + اسم الإعداد + خطوات الإصلاح.
-    """
-    where = f" (setting {setting_name})" if setting_name else ""
-    try:
-        size = os.path.getsize(resolved_path)
-    except OSError:
-        # المسار مش ملف على الـ Disk (URI أو مسار بيتحل جوّه ultralytics) — نسيب
-        # التحقق لـ ultralytics نفسه بدل ما نفشل تحميلًا سليمًا
-        size = None
-    if size == 0:
-        raise RuntimeError(
-            f"Detection weights {resolved_path!r}{where} are empty (0 bytes) — the file is "
-            "truncated or the copy/download failed. Re-copy Model/*.pt (see "
-            "docs/LOCAL_RUN_TROUBLESHOOTING_AR.md)."
-        )
-    try:
-        return YOLO(resolved_path)
-    except Exception as exc:  # noqa: BLE001 - نعيد الرمي برسالة واضحة مع السبب الأصلي
-        raise RuntimeError(
-            f"Failed to load detection weights {resolved_path!r}{where}: "
-            f"{type(exc).__name__}: {exc}. The weight file is empty, truncated, corrupt, or not "
-            "a YOLO checkpoint. Re-copy it from the repository (or re-export it), then restart "
-            "the service. See docs/LOCAL_RUN_TROUBLESHOOTING_AR.md."
-        ) from exc
-
-
-def weight_fingerprint(path: str) -> dict[str, object]:
-    """
-    بصمة الأوزان المحمّلة فعلًا: اسم الملف، الحجم، و SHA-256.
-
-    الهدف تشغيلي: السجل (log) يقول بالظبط أنهي ملف أوزان اشتغل، حتى لو فيه نسخة
-    قديمة في مكان تاني أو مسار في ``.env`` اتحوّل بالترحيل الآمن. القراءة chunked
-    (1 MiB) عشان ما تحمّلش الملف كله في الذاكرة، والبايتات بتتقرأ من غير أي
-    unpickle (مفيش تنفيذ كود من ملف الأوزان).
-    """
-    resolved = os.path.realpath(path) if os.path.exists(path) else path
+def weight_fingerprint(path: str | Path) -> dict[str, object]:
     digest = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as handle:
-        while chunk := handle.read(1 << 20):
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
-            size += len(chunk)
     return {
-        "path": path,
-        "real_path": resolved,
-        "size_bytes": size,
+        "filename": MODEL_FILENAME,
+        "size_bytes": Path(path).stat().st_size,
         "sha256": digest.hexdigest(),
     }
 
 
-def resolve_model_path(model_path: str, fallbacks: tuple[str, ...] = ()) -> str:
-    """
-    يحسم مسار الموديل على الـ Disk مع ترحيل آمن للأوزان المرفودة.
-
-    * مسار مضبوط على وزن مرفود → يتحوّل للبديل المعتمد.
-    * fallback مرفود → بيتخطّى دايمًا (ولو الملف موجود فعلًا).
-    """
-    migrated = migrate_model_path(model_path)
-    if os.path.exists(migrated):
-        return migrated
-    for candidate in fallbacks:
-        migrated_candidate = migrate_model_path(candidate)
-        if is_retired_model_path(migrated_candidate):
-            logger.warning("Skipping retired model weight in fallbacks: %s", candidate)
-            continue
-        if os.path.exists(migrated_candidate):
-            logger.warning(
-                "Configured model '%s' not found; falling back to '%s'",
-                model_path,
-                migrated_candidate,
-            )
-            return migrated_candidate
-    return migrated
-
-
-def require_model_file(
-    model_path: str,
-    fallbacks: tuple[str, ...] = (),
-    *,
-    setting_name: str = "",
-) -> str:
-    """Resolve a model path and fail fast with an actionable error when no weights exist.
-
-    Checks the configured path (after safe weight migration) plus every fallback,
-    so a typo'd ``.env`` path or a missing ``Model/*.pt`` file surfaces as a clear
-    ``FileNotFoundError`` instead of an obscure YOLO/ultralytics traceback.
-    """
-    resolved = resolve_model_path(model_path, fallbacks)
-    if os.path.exists(resolved):
-        return resolved
-    candidates = ", ".join([model_path, *fallbacks]) or "(none)"
-    where = f" (setting {setting_name})" if setting_name else ""
-    raise FileNotFoundError(
-        f"Detection model weights not found{where}. Checked: {candidates} "
-        f"(resolved to {resolved!r}). Put the .pt weights in Model/ or fix the model "
-        "path in .env (CONSTRUCTION_MODEL_PATH / MEDICAL_MODEL_PATH). "
-        "See docs/LOCAL_RUN_TROUBLESHOOTING_AR.md."
-    )
-
-
-def sanitize_class_conf_thresholds(
-    class_names: dict[int, str],
-    thresholds: dict[int, float],
-    *,
-    migrated_from_retired: bool = False,
-) -> dict[int, float]:
-    """
-    ينظّف خريطة عتبات الثقة لكل فئة بعد ترحيل الأوزان.
-
-    * لو الموديل نفسه جاي من مسار مرفود (مثل ``bestMedicalModel2.pt``) وتم
-      ترحيله تلقائيًا إلى ``bestMedicalModel_FINAL.pt``، فترتيب وأرقام الفئات تغيّر
-      بالكامل حتى لو الأرقام ما زالت داخل ``0..10`` — لذلك نُسقط الخريطة القديمة
-      بالكامل حتى لا تُفرض عتبة 0.70 على الفئات الموجبة (`hand gloves` / `mask`).
-      (الترحيل ``bestMedicalModel.pt -> _FINAL`` مستثنى لأن ترتيب الفئات متطابق،
-      انظر ``CLASS_ID_COMPATIBLE_RETIRED_PATHS``.)
-    * في الحالات العادية، نرمي أي id غير موجود في الموديل المحمّل ونسجّله.
-    """
-    if not thresholds:
-        return {}
-    if migrated_from_retired:
-        logger.warning(
-            "Discarded stale class-conf thresholds %s from retired model weight "
-            "(class IDs do not match replacement model classes %s)",
-            thresholds,
-            class_names,
+def validate_class_names(names: dict[int, str] | list[str]) -> dict[int, str]:
+    items = names.items() if isinstance(names, dict) else enumerate(names)
+    canonical: dict[int, str] = {}
+    for class_id, name in items:
+        normalized = canonical_class_name(name)
+        if not normalized:
+            raise RuntimeError("Checkpoint contains a class outside the industrial PPE allowlist")
+        if normalized in canonical.values():
+            raise RuntimeError("Checkpoint contains ambiguous duplicate industrial classes")
+        canonical[int(class_id)] = normalized
+    required = {"Person", "Hardhat", "NO-Hardhat", "Safety Vest", "NO-Safety Vest"}
+    if not required.issubset(canonical.values()):
+        raise RuntimeError(
+            "Checkpoint must include Person, Hardhat and Safety Vest with their violation classes"
         )
-        return {}
-    valid_ids = set(class_names)
-    kept = {cid: thr for cid, thr in thresholds.items() if cid in valid_ids}
-    dropped = sorted(set(thresholds) - set(kept))
-    if dropped:
-        logger.warning(
-            "Dropped class-conf thresholds for unknown class ids %s (model classes: %s)",
-            dropped,
-            sorted(valid_ids),
-        )
-    return kept
-
-
-def sanitize_inverted_class_thresholds(
-    class_names: dict[int, str],
-    thresholds: dict[int, float],
-    default_class_conf: float,
-    *,
-    model_label: str = "",
-) -> dict[int, float]:
-    """
-    يمنع انعكاس عتبات الثقة بين الفئة الموجبة والفئة السالبة المقابلة لها.
-
-    في بقايا إعدادات ``bestMedicalModel2.pt``، كانت الفئة ``2`` (`hand gloves`)
-    والفئة ``5`` (`mask`) تأخذان ``0.70`` بينما الفئات السالبة ``7`` (`no hand gloves`)
-    و ``9`` (`no mask`) تأخذ ``0.25–0.30``، مما يجعل النظام يعمى عن الكمامة/القفاز
-    ويسجل مخالفة فورية. إذا كانت عتبة الفئة الموجبة أعلى من عتبة الفئة السالبة
-    المقابلة لها، نخفّض عتبة الموجب لتطابق عتبة السالب (أو العتبة الافتراضية).
-    """
-    if not thresholds or not class_names:
-        return dict(thresholds)
-
-    canonical_to_id: dict[str, int] = {
-        canonical_class_name(name): cid for cid, name in class_names.items()
-    }
-    adjusted = dict(thresholds)
-    prefix = f"[{model_label}] " if model_label else ""
-
-    for pos_canon, neg_canon in _POSITIVE_TO_NEGATIVE_CANONICAL.items():
-        pos_id = canonical_to_id.get(pos_canon)
-        neg_id = canonical_to_id.get(neg_canon)
-        if pos_id is None or neg_id is None or pos_id not in adjusted:
-            continue
-        pos_thr = adjusted[pos_id]
-        neg_thr = adjusted.get(neg_id, default_class_conf)
-        if pos_thr > neg_thr:
-            logger.warning(
-                "%sClass conf threshold %.2f for positive class %d (%r) exceeds "
-                "negative class %d (%r) threshold %.2f; clamping positive to %.2f",
-                prefix,
-                pos_thr,
-                pos_id,
-                class_names.get(pos_id, pos_canon),
-                neg_id,
-                class_names.get(neg_id, neg_canon),
-                neg_thr,
-                neg_thr,
-            )
-            adjusted[pos_id] = neg_thr
-
-    return adjusted
-
-
-def apply_confidence_floor(
-    global_conf: float,
-    class_conf: dict[int, float],
-    floor: float,
-    *,
-    model_label: str = "",
-) -> tuple[float, dict[int, float]]:
-    """
-    يرفع أي عتبة ثقة أقل من الأرضية الدنيا (``DETECTION_CONFIDENCE_FLOOR``).
-
-    إعدادات منخفضة أوي (0.05 / 0.10) بتنتج كشوف وهمية بكتلة — زي اللي ظهر في
-    لوج 2026-10-12: Person بيتقلب بين 0.26 و 0.93 كل فريم وكشوف صناعية بثقة
-    0.96. الأرضية دي حاجز أدنى للدقة بلا مساس بإعدادات المستخدم الأعلى.
-
-    يرجع ``(global_conf_after, class_conf_after)`` مع تحذير في اللوج لكل قيمة
-    اترفعت.
-    """
-    if floor <= 0:
-        return global_conf, class_conf
-
-    if global_conf < floor:
-        logger.warning(
-            "%sGlobal detection confidence %.2f is below the precision floor %.2f; raising it",
-            f"[{model_label}] " if model_label else "",
-            global_conf,
-            floor,
-        )
-        global_conf = floor
-
-    raised: dict[int, float] = {}
-    adjusted: dict[int, float] = {}
-    for cid, thr in class_conf.items():
-        if thr < floor:
-            raised[cid] = floor
-            adjusted[cid] = floor
-        else:
-            adjusted[cid] = thr
-    if raised:
-        logger.warning(
-            "%sClass conf threshold(s) %s below the precision floor %.2f were raised",
-            f"[{model_label}] " if model_label else "",
-            raised,
-            floor,
-        )
-
-    return global_conf, adjusted
+    return canonical
 
 
 class PPEDetector:
-    def __init__(
-        self,
-        model_path: str,
-        confidence: float,
-        default_class_conf: float,
-        class_conf_thresholds: str = "",
-        fallbacks: tuple[str, ...] = (),
-        *,
-        setting_name: str = "",
-    ) -> None:
-        # Check weights on disk BEFORE importing ultralytics/torch, so a missing
-        # .pt file surfaces as a clear FileNotFoundError even when the ML stack
-        # is not installed yet.
-        resolved_path = require_model_file(model_path, fallbacks, setting_name=setting_name)
+    """One shared, thread-safe detector for RTSP, images, video and camera workers."""
+
+    def __init__(self) -> None:
+        path = require_model_file()
+        self.weights_fingerprint = weight_fingerprint(path)
+        expected = settings.PPE_MODEL_SHA256.lower()
+        if expected and self.weights_fingerprint["sha256"] != expected:
+            raise RuntimeError(
+                "Approved checkpoint SHA-256 verification failed; inference will not start"
+            )
         try:
             from ultralytics import YOLO
-        except ModuleNotFoundError as exc:
+        except ImportError as exc:
             raise RuntimeError(
-                "The 'ultralytics' package is not installed, so YOLO models cannot load. "
-                "Install backend dependencies with `pip install -r requirements.txt`."
+                "Install inference dependencies with `pip install -r requirements.txt`"
             ) from exc
-
-        self.model = _load_yolo_weights(YOLO, resolved_path, setting_name=setting_name)
-        self.confidence = confidence
-        self.default_class_conf = default_class_conf
-        model_label = os.path.basename(resolved_path)
-        # بصمة الأوزان الفعلية (اسم + حجم + SHA-256) — تسجّل في اللوج عشان يبقى
-        # واضح أنهي نسخة أوزان شغالة فعلًا بعد أي ترحيل آمن
         try:
-            self.weights_fingerprint = weight_fingerprint(resolved_path)
-        except OSError as exc:  # ملف اتقرأ في التحميل لكن اتمسح/اتقفل بعد كده
-            self.weights_fingerprint = {"path": resolved_path, "error": str(exc)}
-        # بعد ترحيل الأوزان: لو المسار الأصلي مرفود **بترتيب فئات مختلف** تتشال
-        # خريطة الـ class ids القديمة بالكامل (لأن أرقامها بقت معنى تاني). أما لو
-        # الترحيل بيحافظ على نفس ترتيب الفئات (bestMedicalModel.pt -> _FINAL)
-        # فالعتبات اللي المستخدم ضبطها تفضل سارية وفي الحالات العادية تتشال أي
-        # فئة غير موجودة في الموديل
-        migrated_from_retired = is_retired_model_path(
-            model_path
-        ) and not migration_preserves_class_ids(model_path)
-        if migrated_from_retired:
-            logger.warning(
-                "Configured model '%s' is retired with incompatible class ids; "
-                "per-class thresholds will be discarded",
-                model_path,
-            )
-        self.class_conf = sanitize_class_conf_thresholds(
-            self.model.names,
-            settings.parse_class_thresholds_str(class_conf_thresholds),
-            migrated_from_retired=migrated_from_retired,
-        )
-        # حاجز الدقة: عتبات أقل من الأرضية الدنيا بتترفع تلقائيًا (بلوج تحذيري)
-        self.confidence, self.class_conf = apply_confidence_floor(
-            self.confidence,
-            self.class_conf,
-            settings.DETECTION_CONFIDENCE_FLOOR,
-            model_label=model_label,
-        )
-        # الـ default class conf نفسه مش فايت من الخريطة — نطبّق عليه الأرضية كمان
-        if self.default_class_conf < settings.DETECTION_CONFIDENCE_FLOOR:
-            logger.warning(
-                "[%s] Default class conf %.2f is below the precision floor %.2f; raising it",
-                model_label,
-                self.default_class_conf,
-                settings.DETECTION_CONFIDENCE_FLOOR,
-            )
-            self.default_class_conf = settings.DETECTION_CONFIDENCE_FLOOR
-        # منع انعكاس العتبات (موجب أعلى من السالب المقابل له) حتى لو المسار اتعدّل يدويًا
-        self.class_conf = sanitize_inverted_class_thresholds(
-            self.model.names,
-            self.class_conf,
-            self.default_class_conf,
-            model_label=model_label,
-        )
+            # The on-disk check above prevents ultralytics from downloading a different checkpoint.
+            self.model = YOLO(str(path), task="detect")
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot load {MODEL_FILENAME}; verify that the artifact is complete and compatible"
+            ) from exc
+        if getattr(self.model, "task", None) != "detect":
+            raise RuntimeError("The approved checkpoint must be an object detection model")
+        self.class_names = validate_class_names(self.model.names)
+        self.confidence = settings.DETECTION_CONFIDENCE
         self._lock = threading.Lock()
-
-        logger.info("PPEDetector loaded: %s (global_conf=%.2f)", resolved_path, self.confidence)
-        logger.info("Weights fingerprint: %s", self.weights_fingerprint)
-        logger.info("Default class conf: %.2f", self.default_class_conf)
-        logger.info("Class-specific conf map: %s", self.class_conf)
-        logger.info("Model classes: %s", self.model.names)
-
-    @property
-    def class_names(self) -> dict[int, str]:
-        return self.model.names
+        logger.info(
+            "Industrial detector ready: %s conf=%.2f", self.weights_fingerprint, self.confidence
+        )
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        # YOLO predictor instance is not thread-safe across concurrent run_in_executor calls
+        if (
+            not isinstance(frame, np.ndarray)
+            or frame.ndim != 3
+            or frame.shape[2] != 3
+            or not frame.size
+        ):
+            raise ValueError("Expected a non-empty BGR image")
+        height, width = frame.shape[:2]
+        detections: list[Detection] = []
         with self._lock:
             results = self.model(frame, conf=self.confidence, verbose=False)
-
-        detections: list[Detection] = []
-        for result in results:
-            if result.boxes is None:
-                continue
-
-            for box in result.boxes:
-                cls_id = int(box.cls[0])
-                conf = float(box.conf[0])
-
-                thr = self.class_conf.get(cls_id, self.default_class_conf)
-                if conf < thr:
+            for result in results:
+                if result.boxes is None:
                     continue
-
-                name = self.model.names.get(cls_id, str(cls_id))
-                color = CLASS_COLORS_BY_NAME.get(name, (200, 200, 200))
-
-                detections.append(
-                    Detection(
-                        class_id=cls_id,
-                        class_name=name,
-                        confidence=conf,
-                        x1=int(box.xyxy[0][0]),
-                        y1=int(box.xyxy[0][1]),
-                        x2=int(box.xyxy[0][2]),
-                        y2=int(box.xyxy[0][3]),
-                        color=color,
+                for box in result.boxes:
+                    class_id = int(box.cls[0])
+                    name = self.class_names.get(class_id)
+                    conf = float(box.conf[0])
+                    coords = [float(v) for v in box.xyxy[0]]
+                    if not name or not math.isfinite(conf) or not self.confidence <= conf <= 1.0:
+                        continue
+                    if len(coords) != 4 or not all(math.isfinite(v) for v in coords):
+                        continue
+                    x1, y1, x2, y2 = coords
+                    x1, x2 = max(0, min(width, int(x1))), max(0, min(width, int(x2)))
+                    y1, y2 = max(0, min(height, int(y1))), max(0, min(height, int(y2)))
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    color = (
+                        DANGER_BGR
+                        if is_negative_class(name)
+                        else TEXT_BGR
+                        if name == "Person"
+                        else GOLD_BGR
                     )
-                )
-
+                    detections.append(Detection(class_id, name, conf, x1, y1, x2, y2, color))
         return detections

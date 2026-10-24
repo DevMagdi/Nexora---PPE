@@ -19,9 +19,7 @@ pwd_context = CryptContext(
     deprecated="auto",
     pbkdf2_sha256__default_rounds=600_000,
 )
-oauth2_scheme_optional = OAuth2PasswordBearer(
-    tokenUrl="/api/v1/auth/login", auto_error=False
-)
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 TokenType = Literal["access", "media"]
 
@@ -208,11 +206,7 @@ async def _load_user_from_token(
 ) -> User:
     payload = decode_token_payload(token, expected_type)
     user = await db.get(User, int(payload["sub"]))
-    if (
-        user is None
-        or not user.is_active
-        or user.token_version != int(payload.get("ver", 0))
-    ):
+    if user is None or not user.is_active or user.token_version != int(payload.get("ver", 0)):
         raise _unauthorized()
     return user
 
@@ -266,7 +260,9 @@ def require_roles(*roles: str):
 
     async def dependency(user: User = Depends(get_current_user)) -> User:
         if user.role not in allowed:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+            )
         return user
 
     return dependency

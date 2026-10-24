@@ -7,7 +7,10 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function getErrorMessage(error: unknown, fallback = "حدث خطأ غير متوقع"): string {
+  if (typeof error === "string") return error
   if (axios.isAxiosError(error)) {
+    if (!error.response || error.response.status >= 500)
+      return "تعذّر الاتصال بالخادم. تحقّق من تشغيل الخدمة والموديل المعتمد ثم أعد المحاولة."
     const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail
     if (typeof detail === "string") return detail
     if (detail && typeof detail === "object" && "message" in detail) {

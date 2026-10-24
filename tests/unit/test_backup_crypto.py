@@ -9,7 +9,7 @@ from app import backup
 
 
 def test_backup_encryption_round_trip_and_no_plaintext(tmp_path):
-    plaintext = (b"sensitive database contents\x00" * 1000)
+    plaintext = b"sensitive database contents\x00" * 1000
     encrypted = tmp_path / "database.nxb"
     restored = tmp_path / "restored.dump"
     key = b"k" * 32

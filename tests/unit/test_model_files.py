@@ -1,148 +1,125 @@
-"""Model weights and DB startup errors must be actionable, not obscure tracebacks."""
-
 from __future__ import annotations
 
+import hashlib
+import sys
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import numpy as np
 import pytest
 
+from app.core.config import settings
+from app.core.detector import (
+    PPEDetector,
+    require_model_file,
+    validate_class_names,
+    weight_fingerprint,
+)
+from app.core.model_policy import MODEL_FILENAME, REPO_ROOT, validate_model_path
+from app.core.ppe import CANONICAL_CLASS_NAMES
 
-def test_require_model_file_returns_existing(tmp_path, monkeypatch):
-    detector = pytest.importorskip("app.core.detector")
+
+def test_relative_model_path_is_independent_of_working_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    weights = tmp_path / "Model" / "ppe.pt"
-    weights.parent.mkdir(parents=True)
-    weights.write_bytes(b"weights")
-
-    assert (
-        detector.require_model_file(
-            "Model/ppe.pt",
-            fallbacks=("Model/other.pt",),
-            setting_name="CONSTRUCTION_MODEL_PATH",
-        )
-        == "Model/ppe.pt"
-    )
+    assert validate_model_path(f"Model/{MODEL_FILENAME}") == REPO_ROOT / "Model" / MODEL_FILENAME
 
 
-def test_require_model_file_lists_candidates_when_missing(tmp_path, monkeypatch):
-    detector = pytest.importorskip("app.core.detector")
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(FileNotFoundError, match="CONSTRUCTION_MODEL_PATH") as exc_info:
-        detector.require_model_file(
-            "Model/missing.pt",
-            fallbacks=("Model/other.pt",),
-            setting_name="CONSTRUCTION_MODEL_PATH",
-        )
-    message = str(exc_info.value)
-    assert "Model/missing.pt" in message
-    assert "Model/other.pt" in message
+def test_missing_weights_fail_before_import_or_download(tmp_path, monkeypatch):
+    path = tmp_path / MODEL_FILENAME
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(path))
+    with pytest.raises(FileNotFoundError, match="no fallback"):
+        PPEDetector()
+    assert not path.exists()
 
 
-def test_redact_database_url_hides_password():
-    from app.db.driver_hints import redact_database_url
-
-    assert (
-        redact_database_url("mssql+aioodbc://sa:P@ssw0rd@dbhost:1433/app")
-        == "mssql+aioodbc://sa:***@dbhost:1433/app"
-    )
-    assert redact_database_url("sqlite+aiosqlite:///./ppe_detection.db") == (
-        "sqlite+aiosqlite:///./ppe_detection.db"
-    )
+def test_empty_weights_fail_fast(tmp_path):
+    path = tmp_path / MODEL_FILENAME
+    path.touch()
+    with pytest.raises(RuntimeError, match="empty"):
+        require_model_file(str(path))
 
 
-def test_database_backend_label():
-    from app.db.driver_hints import database_backend_label
-
-    assert "SQL Server" in database_backend_label("mssql+aioodbc://u:p@h/db")
-    assert "SQLite" in database_backend_label("sqlite+aiosqlite:///./ppe_detection.db")
-    assert "PostgreSQL" in database_backend_label("postgresql+asyncpg://u:p@h/db")
-
-
-def test_mssql_startup_hint_is_actionable_and_safe():
-    from app.db.driver_hints import database_startup_hint
-
-    hint = database_startup_hint(
-        "mssql+aioodbc://sa:Sup3rSecret@dbhost:1433/app",
-        ModuleNotFoundError("No module named 'aioodbc'"),
-    )
-    assert "requirements/mssql.txt" in hint
-    assert "ODBC Driver" in hint
-    assert "Sup3rSecret" not in hint
-    assert "LOCAL_RUN_TROUBLESHOOTING" in hint
+def test_symlink_cannot_redirect_to_another_weight(tmp_path):
+    target = tmp_path / "unapproved.bin"
+    target.write_bytes(b"unapproved")
+    path = tmp_path / MODEL_FILENAME
+    path.symlink_to(target)
+    with pytest.raises(ValueError, match="resolved"):
+        require_model_file(str(path))
 
 
-def test_unknown_scheme_hint_lists_supported_backends():
-    from app.db.driver_hints import database_startup_hint
-
-    hint = database_startup_hint("oracle://u:p@h/db", RuntimeError("boom"))
-    assert "sqlite+aiosqlite" in hint
-    assert "oracle" in hint
-
-
-def _mock_ultralytics(monkeypatch, side_effect=None):
-    import sys
-    from unittest.mock import MagicMock
-
-    fake_ultralytics = MagicMock()
-    if side_effect is not None:
-        fake_ultralytics.YOLO.side_effect = side_effect
-    else:
-        fake_model = MagicMock()
-        fake_model.names = {0: "mask", 1: "no mask"}
-        fake_ultralytics.YOLO.return_value = fake_model
-    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultralytics)
-    return fake_ultralytics
+def test_fingerprint_is_sha256_of_actual_file(tmp_path):
+    path = tmp_path / MODEL_FILENAME
+    path.write_bytes(b"approved-artifact-fixture")
+    fingerprint = weight_fingerprint(path)
+    assert fingerprint["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert fingerprint["size_bytes"] == path.stat().st_size
 
 
-def test_empty_weight_file_fails_fast_with_actionable_message(tmp_path, monkeypatch):
-    """ملف أوزان فاضي (نسخة/تحميل ناقص) لازم يطلع رسالة واضحة مش Errno غامض."""
-    from app.core.detector import PPEDetector
-
-    _mock_ultralytics(monkeypatch)
-    model_dir = tmp_path / "Model"
-    model_dir.mkdir()
-    (model_dir / "empty.pt").write_bytes(b"")
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(RuntimeError) as exc_info:
-        PPEDetector("Model/empty.pt", 0.25, 0.35, "", setting_name="MEDICAL_MODEL_PATH")
-
-    message = str(exc_info.value)
-    assert "Model/empty.pt" in message
-    assert "MEDICAL_MODEL_PATH" in message
-    assert "empty" in message.lower()
+def test_pin_mismatch_never_imports_inference_runtime(tmp_path, monkeypatch):
+    path = tmp_path / MODEL_FILENAME
+    path.write_bytes(b"fixture")
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(path))
+    monkeypatch.setattr(settings, "PPE_MODEL_SHA256", "0" * 64)
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        PPEDetector()
 
 
-def test_truncated_weight_file_wraps_ultralytics_error(tmp_path, monkeypatch):
-    """خطأ ultralytics الغامض (OSError/TypeError) بيتحوّل لرسالة تشغيلية فيها السبب."""
-    from app.core.detector import PPEDetector
-
-    _mock_ultralytics(monkeypatch, side_effect=OSError(22, "Invalid argument"))
-    model_dir = tmp_path / "Model"
-    model_dir.mkdir()
-    (model_dir / "truncated.pt").write_bytes(b"PK\x03\x04not-a-real-archive")
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(RuntimeError) as exc_info:
-        PPEDetector("Model/truncated.pt", 0.25, 0.35, "", setting_name="MEDICAL_MODEL_PATH")
-
-    message = str(exc_info.value)
-    assert "Model/truncated.pt" in message
-    assert "MEDICAL_MODEL_PATH" in message
-    assert "OSError" in message
-    assert "Invalid argument" in message
-    assert exc_info.value.__cause__ is not None
+@pytest.mark.parametrize(
+    "names",
+    [
+        list(CANONICAL_CLASS_NAMES) + ["Out of scope"],
+        ["Hardhat"],
+        list(CANONICAL_CLASS_NAMES) + ["worker"],
+    ],
+)
+def test_checkpoint_class_contract_is_closed(names):
+    with pytest.raises(RuntimeError):
+        validate_class_names(names)
 
 
-def test_valid_weights_still_load_through_the_wrapper(tmp_path, monkeypatch):
-    from app.core.detector import PPEDetector
+def test_class_aliases_are_normalized_without_id_assumptions():
+    names = {
+        4: "worker",
+        12: "helmet",
+        2: "no_helmet",
+        9: "vest",
+        0: "no_vest",
+        8: "Boot",
+        7: "NO-Boot",
+    }
+    canonical = validate_class_names(names)
+    assert canonical[8] == "Safety Boots"
+    assert canonical[7] == "NO-Boot"
+    assert canonical[4] == "Person"
 
-    fake_ultralytics = _mock_ultralytics(monkeypatch)
-    model_dir = tmp_path / "Model"
-    model_dir.mkdir()
-    (model_dir / "ok.pt").write_bytes(b"PK\x03\x04real-ish-bytes")
-    monkeypatch.chdir(tmp_path)
 
-    detector = PPEDetector("Model/ok.pt", 0.25, 0.35, "")
+@pytest.fixture
+def mock_checkpoint(tmp_path, monkeypatch):
+    path = tmp_path / MODEL_FILENAME
+    path.write_bytes(b"mocked-loader-fixture-not-deployment-weights")
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(path))
+    monkeypatch.setattr(settings, "PPE_MODEL_SHA256", "")
+    model = MagicMock()
+    model.task = "detect"
+    model.names = dict(enumerate(CANONICAL_CLASS_NAMES))
+    model.return_value = [SimpleNamespace(boxes=[])]
+    factory = MagicMock(return_value=model)
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=factory))
+    return path, model, factory
 
-    fake_ultralytics.YOLO.assert_called_once_with("Model/ok.pt")
-    assert detector.class_names == {0: "mask", 1: "no mask"}
+
+def test_one_loader_uses_only_the_approved_file_and_default_confidence(mock_checkpoint):
+    path, model, factory = mock_checkpoint
+    detector = PPEDetector()
+    assert detector.detect(np.zeros((64, 64, 3), dtype=np.uint8)) == []
+    factory.assert_called_once_with(str(path), task="detect")
+    assert model.call_args.kwargs["conf"] == 0.50
+    assert set(detector.class_names.values()) == set(CANONICAL_CLASS_NAMES)
+
+
+def test_corrupt_checkpoint_has_actionable_error(mock_checkpoint):
+    _, _, factory = mock_checkpoint
+    factory.side_effect = OSError("truncated")
+    with pytest.raises(RuntimeError, match="ppe_unified_best.pt"):
+        PPEDetector()

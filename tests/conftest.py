@@ -46,7 +46,6 @@ async def test_user(db_session: AsyncSession) -> User:
     user = User(
         username="admin",
         password_hash=hash_password("admin123"),
-        sector="both",
         role="admin",
         is_active=True,
         must_change_password=False,
@@ -84,10 +83,7 @@ async def test_client(db_session: AsyncSession, test_user: User):
     mock_manager.get_latest_frame_with_seq.return_value = (None, 0)
     mock_manager._entries = {}
 
-    app.state.detectors = {
-        "construction": mock_detector,
-        "medical": mock_detector,
-    }
+    app.state.detector = mock_detector
     app.state.camera_manager = mock_manager
 
     token = create_access_token(sub=str(test_user.id), token_version=test_user.token_version)
@@ -121,3 +117,10 @@ async def anon_client(db_session: AsyncSession):
         base_url="http://test",
     ) as client:
         yield client
+
+
+@pytest.fixture(autouse=True)
+def controlled_camera_allowlist(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ALLOWED_RTSP_PREFIXES", "rtsp://192.168.10.")

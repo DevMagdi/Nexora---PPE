@@ -100,7 +100,9 @@ def run_migrations_online() -> None:
                     settings.DB_MIGRATION_LOCK_TIMEOUT_MS,
                 )
 
-            migration_logger.info("Checking current schema revision and applying pending migrations...")
+            migration_logger.info(
+                "Checking current schema revision and applying pending migrations..."
+            )
             context.configure(connection=connection, target_metadata=target_metadata)
             with context.begin_transaction():
                 context.run_migrations()

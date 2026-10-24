@@ -10,7 +10,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
-        destructive: "bg-destructive text-white shadow-sm hover:bg-destructive/90",
+        destructive: "bg-destructive text-background shadow-sm hover:bg-destructive/90",
         outline: "border border-border bg-card shadow-sm hover:bg-muted text-foreground",
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-muted hover:text-foreground text-muted-foreground",
@@ -27,7 +27,7 @@ const buttonVariants = cva(
       variant: "default",
       size: "default",
     },
-  }
+  },
 )
 
 function Button({

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,7 +14,7 @@ from app.core.auth import get_current_user, require_roles
 from app.core.ppe import sanitize_enabled_classes
 from app.core.rate_limit import get_client_ip
 from app.db.audit import add_audit_event, hash_identifier
-from app.db.models import Camera, User
+from app.db.models import Camera, Site, User
 from app.db.session import get_db
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 
@@ -21,8 +22,6 @@ router = APIRouter(prefix="/cameras", tags=["cameras"])
 
 
 def _redact_source_uri(source_type: str, source_uri: str) -> str:
-    if source_type == "webcam":
-        return "Webcam"
     if source_type == "file":
         return "Restricted video file"
     parsed = urlsplit(source_uri)
@@ -36,14 +35,16 @@ def _redact_source_uri(source_type: str, source_uri: str) -> str:
 
 
 def _to_response(cam: Camera, manager: CameraManager) -> CameraResponse:
-    values = {field: getattr(cam, field) for field in CameraResponse.model_fields if field != "is_running"}
+    values = {
+        field: getattr(cam, field) for field in CameraResponse.model_fields if field != "is_running"
+    }
     values["source_uri"] = _redact_source_uri(cam.source_type, cam.source_uri)
     return CameraResponse(**values, is_running=manager.is_running(cam.id))
 
 
-def _check_sector_access(user: User, camera: Camera) -> None:
-    if user.sector != "both" and camera.profile != user.sector:
-        raise HTTPException(status_code=403, detail="Forbidden")
+async def _validate_site(db: AsyncSession, site_id: int | None) -> None:
+    if site_id is not None and await db.get(Site, site_id) is None:
+        raise HTTPException(status_code=422, detail="Industrial site not found")
 
 
 def _audit(
@@ -54,7 +55,7 @@ def _audit(
     camera: Camera,
     changed_fields: list[str] | None = None,
 ) -> None:
-    details = {"profile": camera.profile, "source_type": camera.source_type}
+    details = {"site_id": camera.site_id, "source_type": camera.source_type}
     if changed_fields:
         details["changed_fields"] = changed_fields
     add_audit_event(
@@ -75,8 +76,6 @@ async def list_cameras(
     user: User = Depends(get_current_user),
 ):
     q = select(Camera)
-    if user.sector != "both":
-        q = q.where(Camera.profile == user.sector)
     result = await db.execute(q)
     cameras = result.scalars().all()
     manager: CameraManager = get_camera_manager(request)
@@ -88,22 +87,20 @@ async def create_camera(
     body: CameraCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles("admin", "operator")),
+    user: User = Depends(require_roles("admin", "supervisor")),
 ):
-    profile = user.sector if user.sector != "both" else body.profile or "construction"
-    if user.sector != "both" and body.profile not in (None, user.sector):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    await _validate_site(db, body.site_id)
     try:
         source_uri = validate_camera_source(body.source_type, body.source_uri)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    enabled = sanitize_enabled_classes(profile, body.enabled_classes)  # type: ignore[arg-type]
+    enabled = sanitize_enabled_classes(body.enabled_classes)
     cam = Camera(
         name=body.name.strip(),
         source_type=body.source_type,
         source_uri=source_uri,
-        profile=profile,
+        site_id=body.site_id,
         enabled_classes=enabled,
     )
     db.add(cam)
@@ -126,7 +123,6 @@ async def get_camera(
     cam = await db.get(Camera, camera_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    _check_sector_access(user, cam)
     return _to_response(cam, get_camera_manager(request))
 
 
@@ -136,14 +132,17 @@ async def update_camera(
     body: CameraUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles("admin", "operator")),
+    user: User = Depends(require_roles("admin", "supervisor")),
 ):
     cam = await db.get(Camera, camera_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    _check_sector_access(user, cam)
 
     changes: list[str] = []
+    if "site_id" in body.model_fields_set:
+        await _validate_site(db, body.site_id)
+        cam.site_id = body.site_id
+        changes.append("site_id")
     if body.name is not None:
         cam.name = body.name.strip()
         changes.append("name")
@@ -154,9 +153,13 @@ async def update_camera(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         changes.append("source_uri")
     if body.enabled_classes is not None:
-        cam.enabled_classes = sanitize_enabled_classes(cam.profile, body.enabled_classes)  # type: ignore[arg-type]
+        cam.enabled_classes = sanitize_enabled_classes(body.enabled_classes)
         changes.append("enabled_classes")
 
+    manager: CameraManager = get_camera_manager(request)
+    if "source_uri" in changes:
+        await manager.stop_camera(camera_id)
+        cam.is_active = False
     # Record field names only; a changed source URI may contain camera credentials.
     _audit(request, db, "camera.updated", user, cam, changed_fields=changes)
     await db.commit()
@@ -172,12 +175,11 @@ async def delete_camera(
     camera_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles("admin", "operator")),
+    user: User = Depends(require_roles("admin", "supervisor")),
 ):
     cam = await db.get(Camera, camera_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    _check_sector_access(user, cam)
 
     manager: CameraManager = get_camera_manager(request)
     await manager.stop_camera(camera_id)
@@ -191,36 +193,42 @@ async def start_camera(
     camera_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles("admin", "operator")),
+    user: User = Depends(require_roles("admin", "supervisor")),
 ):
     cam = await db.get(Camera, camera_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    _check_sector_access(user, cam)
 
     manager: CameraManager = get_camera_manager(request)
+    # Persist restart intent before processing starts. A short video may reach
+    # EOF immediately; its worker must be the final writer of inactive state.
+    cam.is_active = True
+    await db.commit()
     try:
         ok = await manager.start_camera(
             camera_id,
-            cam.profile,  # type: ignore[arg-type]
             cam.source_type,
             cam.source_uri,
             cam.enabled_classes,
         )
-    except ValueError as exc:
+    except (ValueError, asyncio.CancelledError) as exc:
+        cam.is_active = False
+        await db.commit()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not ok:
+        cam.is_active = False
+        await db.commit()
         raise HTTPException(
             status_code=400,
             detail=(
-                "Could not open the camera source. Check the URI or webcam index, operating-system "
-                "camera permissions, and whether another app is using the device. If the backend "
-                "runs in Docker, expose the host camera to the container."
+                "Could not open the camera source. Check the RTSP URI, network access, "
+                "camera credentials and source availability."
             ),
         )
 
-    cam.is_active = True
     _audit(request, db, "camera.started", user, cam)
     await db.commit()
     return {"status": "started", "camera_id": camera_id}
@@ -231,12 +239,11 @@ async def stop_camera(
     camera_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_roles("admin", "operator")),
+    user: User = Depends(require_roles("admin", "supervisor")),
 ):
     cam = await db.get(Camera, camera_id)
     if cam is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    _check_sector_access(user, cam)
 
     manager: CameraManager = get_camera_manager(request)
     await manager.stop_camera(camera_id)

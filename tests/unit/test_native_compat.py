@@ -211,9 +211,7 @@ def test_only_import_errors_are_treated_as_native_failures():
     ("value", "expected"),
     [("1", True), ("true", True), ("yes", True), ("0", False), ("false", False), ("", False)],
 )
-def test_pure_python_requested_honours_the_documented_flags(
-    no_dotenv, value: str, expected: bool
-):
+def test_pure_python_requested_honours_the_documented_flags(no_dotenv, value: str, expected: bool):
     for name in native_compat.FORCE_PURE_PYTHON_ENV_VARS:
         no_dotenv.delenv(name, raising=False)
     no_dotenv.setenv("DISABLE_SQLALCHEMY_CEXT", value)
