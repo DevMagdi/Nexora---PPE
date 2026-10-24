@@ -43,7 +43,7 @@ async def test_meta_ppe_classes(test_client):
     assert data["scope"] == "industrial"
     assert set(data["allowed"]) == {"helmet", "vest", "gloves", "boots", "goggles"}
     model = await test_client.get("/api/v1/meta/system")
-    assert model.json()["model"] == "ppe_unified_best.pt"
+    assert model.json()["model"] == "ppe.pt"
     assert model.json()["confidence"] == 0.5
 
 

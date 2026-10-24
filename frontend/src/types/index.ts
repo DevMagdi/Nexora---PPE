@@ -111,7 +111,7 @@ export interface LiveCounts {
 }
 export interface SystemMeta {
   scope: "industrial"
-  model: "ppe_unified_best.pt"
+  model: "ppe.pt"
   confidence: number
   negative_confidence?: number
   effective_negative_confidence?: number

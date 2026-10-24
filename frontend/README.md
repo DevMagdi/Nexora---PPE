@@ -9,7 +9,7 @@ npm ci
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-Start the backend separately using the root README. The backend requires the separately provisioned `Model/ppe_unified_best.pt`; an unavailable backend is shown explicitly on the login screen.
+Start the backend separately using the root README. The backend requires the separately provisioned `Model/ppe.pt`; an unavailable backend is shown explicitly on the login screen.
 
 Browser requests use relative `/api/v1` and `/frames` URLs. Vite proxies them to `http://127.0.0.1:8000` by default. `VITE_API_PROXY_TARGET` can change the server-side proxy destination (for example `http://app:8000` in Compose). Never place backend loopback URLs in browser-facing code. The Vite configuration accepts the Arena preview host.
 

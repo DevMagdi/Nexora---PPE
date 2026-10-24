@@ -188,7 +188,7 @@ export default function UploadsPage({
           <div>
             <h2>نتائج التحليل</h2>
             <p>
-              الموديل الصناعي الموحّد · حد الثقة{" "}
+              الوزن المعتمد {meta?.model ?? "ppe.pt"} · حد الثقة{" "}
               {meta ? `${Math.round(meta.confidence * 100)}%` : "—"}
               {alertConfidence
                 ? ` · السالب للتنبيه ${Math.round(alertConfidence * 100)}% + ثبات زمني`

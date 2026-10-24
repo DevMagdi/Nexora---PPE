@@ -68,6 +68,12 @@ def _winner(indices: list[int], detections: list[Detection]) -> int:
     return negative if difference + _EPS >= NEGATIVE_CLEAR_MARGIN else positive
 
 
+def negative_threshold(display_confidence: float | None = None) -> float:
+    """Explicit negative evidence must clear DETECTION_NEGATIVE_CONFIDENCE (>= .60)."""
+    display = settings.DETECTION_CONFIDENCE if display_confidence is None else display_confidence
+    return max(display, settings.DETECTION_NEGATIVE_CONFIDENCE)
+
+
 def resolve_ppe_conflicts(
     detections: list[Detection], *, display_confidence: float | None = None
 ) -> list[Detection]:
@@ -78,14 +84,18 @@ def resolve_ppe_conflicts(
     equipment and different people never suppress each other's evidence.
     """
     threshold = settings.DETECTION_CONFIDENCE if display_confidence is None else display_confidence
+    # Negative evidence is only displayed/alerts at the explicit-negative floor;
+    # the display threshold alone never paints a weak NO-* box.
+    negatives_threshold = negative_threshold(threshold)
     normalized: list[Detection] = []
     for d in detections:
         name = canonical_class_name(d.class_name)
+        floor = negatives_threshold if name.startswith("NO-") else threshold
         if (
             not name
             or d.source != "model"
             or not math.isfinite(d.confidence)
-            or not threshold <= d.confidence <= 1.0
+            or not floor <= d.confidence <= 1.0
             or not all(math.isfinite(value) for value in (d.x1, d.y1, d.x2, d.y2))
             or d.x2 <= d.x1
             or d.y2 <= d.y1

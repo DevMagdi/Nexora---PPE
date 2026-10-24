@@ -69,8 +69,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     from app.core.detector import PPEDetector
+    from app.core.model_policy import MODEL_FILENAME
 
-    logger.info("Loading the approved industrial PPE checkpoint...")
+    logger.info("Loading the approved industrial PPE checkpoint (%s)...", MODEL_FILENAME)
     # Fail closed if the exact artifact is absent or its class contract is invalid.
     app.state.detector = await asyncio.to_thread(PPEDetector)
 

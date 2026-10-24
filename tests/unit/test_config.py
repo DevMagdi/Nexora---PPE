@@ -8,7 +8,7 @@ from app.core.config import Settings
 def test_industrial_defaults():
     config = Settings(_env_file=None)
     assert config.APP_ENV == "dev"
-    assert config.PPE_MODEL_PATH == "Model/ppe_unified_best.pt"
+    assert config.PPE_MODEL_PATH == "Model/ppe.pt"
     assert 0.45 <= config.DETECTION_CONFIDENCE <= 0.55
     assert config.DETECTION_CONFIDENCE == pytest.approx(0.50)
     assert config.CAMERA_CAPTURE_BUFFER_SIZE == 1
@@ -26,11 +26,36 @@ def test_confidence_rejects_unsafe_values(value):
 
 
 @pytest.mark.parametrize(
-    "path", ["Model/unapproved.bin", "https://example.invalid/ppe_unified_best.pt", "Model/"]
+    "path",
+    [
+        "Model/unapproved.bin",
+        "https://example.invalid/ppe.pt",
+        "Model/",
+        "",
+        "Model/ppe_unified_best.pt",
+        "Model/unified/ppe.pt",
+        "/srv/weights/PPE_UNIFIED_FINAL.pt",
+    ],
 )
 def test_only_approved_checkpoint_path_is_accepted(path):
-    with pytest.raises(ValueError, match="ppe_unified_best.pt"):
+    with pytest.raises(ValueError):
         Settings(_env_file=None, PPE_MODEL_PATH=path)
+
+
+@pytest.mark.parametrize(
+    "path", ["Model/ppe_unified_best.pt", "Model/unified/ppe.pt", "ppe_unified_best.pt"]
+)
+def test_unified_weight_paths_are_rejected_with_the_explicit_message(path):
+    with pytest.raises(ValueError, match="unified weights are rejected") as error:
+        Settings(_env_file=None, PPE_MODEL_PATH=path)
+    assert "Only approved weight Model/ppe.pt is allowed" in str(error.value)
+
+
+def test_negative_confidence_floor_is_sixty_percent():
+    for value in (0.50, 0.55, 0.59):
+        with pytest.raises(ValueError):
+            Settings(_env_file=None, DETECTION_NEGATIVE_CONFIDENCE=value)
+    assert Settings(_env_file=None).DETECTION_NEGATIVE_CONFIDENCE == 0.60
 
 
 def test_environment_override(monkeypatch):

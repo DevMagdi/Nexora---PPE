@@ -88,11 +88,11 @@ class Settings(BaseSettings):
     LOGIN_LOCKOUT_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_MINUTES: int = 15
 
-    # Exactly one deployment artifact; no fallback or secondary detector.
-    PPE_MODEL_PATH: str = "Model/ppe_unified_best.pt"
+    # Exactly one deployment artifact (Model/ppe.pt); no fallback or secondary detector.
+    PPE_MODEL_PATH: str = "Model/ppe.pt"
     PPE_MODEL_SHA256: str = ""
     DETECTION_CONFIDENCE: float = Field(default=0.50, ge=0.45, le=0.95)
-    DETECTION_NEGATIVE_CONFIDENCE: float = Field(default=0.60, ge=0.55, le=1.0)
+    DETECTION_NEGATIVE_CONFIDENCE: float = Field(default=0.60, ge=0.60, le=1.0)
     UPLOADS_DIR: str = "videos/uploads"
     MAX_UPLOAD_MB: int = Field(default=100, ge=1, le=1024)
     MAX_IMAGE_PIXELS: int = Field(default=24_000_000, ge=1)

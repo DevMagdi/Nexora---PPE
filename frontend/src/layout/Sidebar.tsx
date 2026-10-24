@@ -69,7 +69,7 @@ function Navigation({ tab, onNavigate, role, model }: Omit<Props, "open" | "onCl
         <div className="rounded-lg border border-border bg-card p-3">
           <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
             <ShieldCheck className="size-4" />
-            نظام صناعي موحّد
+            نظام صناعي · وزن معتمد
           </div>
           <div dir="ltr" className="latin break-all text-[9px] text-muted-foreground">
             {model?.model ?? "جارٍ قراءة إعدادات الموديل…"}
