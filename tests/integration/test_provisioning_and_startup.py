@@ -147,7 +147,7 @@ async def test_missing_checkpoint_stops_real_lifespan_before_database_mutation(
 ):
     import app.main as main
 
-    monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(tmp_path / "ppe_unified_best.pt"))
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(tmp_path / "ppe.pt"))
     upgrade = AsyncMock()
     monkeypatch.setattr(main, "upgrade_database", upgrade)
     with pytest.raises(FileNotFoundError, match="no fallback"):
@@ -160,12 +160,12 @@ async def test_missing_checkpoint_stops_real_lifespan_before_database_mutation(
 def test_preflight_fails_clearly_without_creating_or_downloading_weights(
     monkeypatch, tmp_path, capsys
 ):
-    path = tmp_path / "ppe_unified_best.pt"
+    path = tmp_path / "ppe.pt"
     monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(path))
     monkeypatch.setattr("sys.argv", ["app.model_check", "--smoke"])
     assert model_check.main() == 1
     error = capsys.readouterr().err
-    assert "Preflight failed" in error and "ppe_unified_best.pt" in error
+    assert "Preflight failed" in error and "ppe.pt" in error
     assert "no fallback" in error and not path.exists()
 
 
@@ -184,3 +184,76 @@ async def test_cli_command_dispatches_and_displays_secrets_only_when_issuing(
     prepare.assert_awaited_once()
     output = capsys.readouterr().out
     assert ("OnceOnly!2026" in output) is (command in {"create-user", "reset-password"})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Model/ppe_unified_best.pt",
+        "Model/unified/ppe.pt",
+        "ppe_unified_best.pt",
+        "/opt/weights/PPE_UNIFIED.pt",
+    ],
+)
+async def test_real_lifespan_rejects_unified_weights_before_touching_the_database(
+    provisioning_db, monkeypatch, value
+):
+    """Boot fails on unified names; only Model/ppe.pt may start."""
+    import app.main as main
+
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", value)
+    upgrade = AsyncMock()
+    monkeypatch.setattr(main, "upgrade_database", upgrade)
+    with pytest.raises(ValueError, match="unified weights are rejected") as error:
+        async with main.lifespan(main.create_app()):
+            pytest.fail("Unified weights must never reach ready state")
+    assert (
+        str(error.value)
+        == "Only approved weight Model/ppe.pt is allowed; unified weights are rejected."
+    )
+    upgrade.assert_not_awaited()
+    assert (await provisioning_db.execute(select(func.count(User.id)))).scalar_one() == 0
+
+
+async def test_real_lifespan_accepts_the_approved_ppe_checkpoint(
+    provisioning_db, monkeypatch, tmp_path
+):
+    import app.main as main
+
+    approved = tmp_path / "ppe.pt"
+    approved.write_bytes(b"approved-fixture")
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", str(approved))
+    monkeypatch.setattr(settings, "PPE_MODEL_SHA256", "")
+
+    detector = MagicMock()
+    detector.detect.return_value = []
+    factory = MagicMock(return_value=detector)
+    monkeypatch.setattr("app.core.detector.PPEDetector", factory)
+    monkeypatch.setattr(main, "upgrade_database", AsyncMock())
+    monkeypatch.setattr(main, "init_db", AsyncMock())
+    monkeypatch.setattr(settings, "FRAMES_DIR", str(tmp_path / "frames"))
+
+    async with main.lifespan(main.create_app()) as _:
+        factory.assert_called_once_with()
+    # The real resolver accepts the approved name and resolves the file.
+    from app.core.model_policy import validate_model_path
+
+    assert validate_model_path(str(approved)).name == "ppe.pt"
+
+
+def test_preflight_rejects_unified_weights_with_the_explicit_message(monkeypatch, capsys):
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", "Model/ppe_unified_best.pt")
+    monkeypatch.setattr("sys.argv", ["app.model_check"])
+    assert model_check.main() == 1
+    error = capsys.readouterr().err
+    assert "Only approved weight Model/ppe.pt is allowed; unified weights are rejected." in error
+
+
+def test_preflight_accepts_only_the_ppe_pt_name(monkeypatch, capsys):
+    monkeypatch.setattr(settings, "PPE_MODEL_PATH", "Model/ppe.pt")
+    monkeypatch.setattr("sys.argv", ["app.model_check"])
+    assert model_check.main() == 1  # weights are absent, but the name policy passes
+    error = capsys.readouterr().err
+    assert "Required industrial weights are missing" in error
+    assert "Model/ppe.pt" in error
+    assert "unified weights are rejected" not in error

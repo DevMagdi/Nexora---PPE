@@ -58,7 +58,7 @@ def test_ci_has_backend_and_real_browser_gates_without_deployment_weights():
     assert "requirements/test.txt" in backend and "--cov-fail-under=75" in backend
     assert "npm run build" in browser and "npm run test:e2e" in browser
     assert "playwright install --with-deps chromium" in browser
-    assert "ppe_unified_best.pt" not in backend  # no download/substitution in CI
+    assert "ppe_unified_best" not in backend  # no download/substitution in CI
 
 
 def test_http_only_production_install_has_no_dummy_rtsp_or_usb_capability(tmp_path, monkeypatch):

@@ -27,7 +27,7 @@ def test_one_model_constructor_and_no_bundled_alternative_checkpoints():
     assert constructors == ["app/core/detector.py"]
     assert all(path.name == MODEL_FILENAME for path in (ROOT / "Model").glob("*.pt"))
     assert 0.45 <= Settings().DETECTION_CONFIDENCE <= 0.55
-    assert Settings().PPE_MODEL_PATH == "Model/ppe_unified_best.pt"
+    assert Settings().PPE_MODEL_PATH == "Model/ppe.pt"
 
 
 def test_schema_and_runtime_are_one_industrial_scope():

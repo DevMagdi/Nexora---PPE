@@ -127,7 +127,7 @@ export async function mockApi(
     if (path === "/meta/system")
       return json({
         scope: "industrial",
-        model: "ppe_unified_best.pt",
+        model: "ppe.pt",
         confidence: 0.5,
         max_upload_mb: 100,
         max_video_seconds: 120,

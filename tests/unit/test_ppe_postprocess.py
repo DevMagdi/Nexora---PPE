@@ -146,27 +146,51 @@ def test_missing_negative_vest_only_disables_negative_alert_not_positive_detecti
     assert resolve_ppe_conflicts([det("Safety Vest")])[0].class_name == "Safety Vest"
 
 
-@pytest.mark.parametrize("confidence", [0.50, 0.55, 0.59])
-def test_negative_display_threshold_is_not_the_persistent_violation_threshold(
-    monkeypatch, confidence
-):
+@pytest.mark.parametrize("confidence", [0.40, 0.50, 0.55, 0.59])
+def test_weak_negative_below_sixty_is_neither_displayed_nor_alerted(monkeypatch, confidence):
+    """A negative must reach DETECTION_NEGATIVE_CONFIDENCE (0.60) to be shown."""
     now = [100.0]
     monkeypatch.setattr("app.core.violation_checker.time.monotonic", lambda: now[0])
     monkeypatch.setattr(settings, "DETECTION_NEGATIVE_CONFIDENCE", 0.60)
     raw = [det("NO-Hardhat", confidence)]
-    assert len(resolve_ppe_conflicts(raw)) == 1
+    assert resolve_ppe_conflicts(raw) == []
     checker = ViolationChecker(persist_seconds=8)
     assert checker.check(1, raw) == []
     now[0] += 8
     assert checker.check(1, raw) == []
 
 
-def test_negative_threshold_is_configurable_and_weak_conflict_resets_persistence(monkeypatch):
+def test_negative_at_sixty_is_displayed_and_alerted(monkeypatch):
     now = [100.0]
     monkeypatch.setattr("app.core.violation_checker.time.monotonic", lambda: now[0])
-    monkeypatch.setattr(settings, "DETECTION_NEGATIVE_CONFIDENCE", 0.55)
+    monkeypatch.setattr(settings, "DETECTION_NEGATIVE_CONFIDENCE", 0.60)
+    raw = [det("NO-Hardhat", 0.60)]
+    displayed = resolve_ppe_conflicts(raw)
+    assert [d.class_name for d in displayed] == ["NO-Hardhat"]
+    assert displayed[0].color == DANGER_BGR
     checker = ViolationChecker(persist_seconds=8)
-    raw = [det("NO-Hardhat", 0.56)]
+    assert checker.check(1, raw) == []
+    now[0] = 108.0
+    assert len(checker.check(1, raw)) == 1
+
+
+def test_positive_equipment_still_displays_below_the_negative_floor(monkeypatch):
+    monkeypatch.setattr(settings, "DETECTION_NEGATIVE_CONFIDENCE", 0.60)
+    result = resolve_ppe_conflicts([det("Hardhat", 0.52)])
+    assert [d.class_name for d in result] == ["Hardhat"]
+
+
+def test_negative_floor_can_never_drop_below_sixty(monkeypatch):
+    monkeypatch.setattr(settings, "DETECTION_NEGATIVE_CONFIDENCE", 0.60)
+    result = resolve_ppe_conflicts([det("NO-Hardhat", 0.60)], display_confidence=0.45)
+    assert len(result) == 1
+
+
+def test_weak_conflict_resets_persistence(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("app.core.violation_checker.time.monotonic", lambda: now[0])
+    checker = ViolationChecker(persist_seconds=8)
+    raw = [det("NO-Hardhat", 0.62)]
     assert checker.check(1, raw) == []
     now[0] = 108.0
     assert len(checker.check(1, raw)) == 1
@@ -179,9 +203,17 @@ def test_negative_threshold_is_configurable_and_weak_conflict_resets_persistence
     assert checker.check(1, [det("NO-Hardhat", 0.9)]) == []
 
 
-def test_invalid_negative_confidence_configuration_is_rejected():
+@pytest.mark.parametrize("value", [0.30, 0.50, 0.55, 0.59])
+def test_negative_confidence_below_sixty_is_rejected(value):
     with pytest.raises(ValueError):
-        Settings(_env_file=None, DETECTION_NEGATIVE_CONFIDENCE=0.50)
+        Settings(_env_file=None, DETECTION_NEGATIVE_CONFIDENCE=value)
+
+
+def test_negative_confidence_accepts_sixty_and_above():
+    for value in (0.60, 0.75, 1.0):
+        assert Settings(
+            _env_file=None, DETECTION_NEGATIVE_CONFIDENCE=value
+        ).DETECTION_NEGATIVE_CONFIDENCE == pytest.approx(value)
 
 
 def test_annotation_cannot_draw_both_conflicting_labels_even_if_given_raw_boxes(monkeypatch):

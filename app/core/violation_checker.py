@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from app.core.config import settings
 from app.core.detector import Detection
-from app.core.postprocess import resolve_ppe_conflicts
+from app.core.postprocess import negative_threshold, resolve_ppe_conflicts
 from app.core.ppe import PPE_CLASSES, canonical_class_name, sanitize_enabled_classes
 
 
@@ -50,7 +50,7 @@ class ViolationChecker:
     ) -> list[ViolationEvent]:
         enabled = sanitize_enabled_classes(enabled_classes)
         detections = resolve_ppe_conflicts(detections)
-        threshold = max(settings.DETECTION_CONFIDENCE, settings.DETECTION_NEGATIVE_CONFIDENCE)
+        threshold = negative_threshold()
         now = time.monotonic()
         events: list[ViolationEvent] = []
         for key in enabled:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import math
 import threading
 from dataclasses import dataclass
@@ -10,21 +9,28 @@ import numpy as np
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.model_policy import MODEL_FILENAME, validate_model_path
+from app.core.model_policy import (
+    MODEL_FILENAME,
+    UNIFIED_REJECTION_MESSAGE,
+    sha256_file,
+    validate_model_path,
+)
 from app.core.postprocess import resolve_ppe_conflicts
 from app.core.ppe import (
     DANGER_BGR as DANGER_BGR,
+)
+from app.core.ppe import (
+    EXPECTED_MODEL_CLASSES,
+    canonical_class_name,
+    is_ignored_model_class,
+    is_negative_class,
+    supported_negative_rules,
 )
 from app.core.ppe import (
     GOLD_BGR as GOLD_BGR,
 )
 from app.core.ppe import (
     TEXT_BGR as TEXT_BGR,
-)
-from app.core.ppe import (
-    canonical_class_name,
-    is_negative_class,
-    supported_negative_rules,
 )
 
 logger = get_logger(__name__)
@@ -45,7 +51,14 @@ class Detection:
 
 
 def require_model_file(model_path: str | None = None) -> Path:
-    path = validate_model_path(model_path or settings.PPE_MODEL_PATH)
+    """Resolve, validate and (when pinned) hash-check the single approved weight."""
+    try:
+        path = validate_model_path(model_path or settings.PPE_MODEL_PATH)
+    except ValueError as exc:
+        message = str(exc)
+        if UNIFIED_REJECTION_MESSAGE in message:
+            raise ValueError(UNIFIED_REJECTION_MESSAGE) from exc
+        raise
     if not path.is_file():
         raise FileNotFoundError(
             f"Required industrial weights are missing: {path}. Install the approved "
@@ -56,18 +69,20 @@ def require_model_file(model_path: str | None = None) -> Path:
         raise RuntimeError(
             f"The approved weights at {path} are empty; re-copy the complete artifact"
         )
+    expected = settings.PPE_MODEL_SHA256.strip().lower()
+    if expected and sha256_file(path) != expected:
+        raise RuntimeError(
+            "Approved checkpoint SHA-256 verification failed; inference will not start. "
+            f"Expected {expected} for {MODEL_FILENAME}"
+        )
     return path
 
 
 def weight_fingerprint(path: str | Path) -> dict[str, object]:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
     return {
         "filename": MODEL_FILENAME,
         "size_bytes": Path(path).stat().st_size,
-        "sha256": digest.hexdigest(),
+        "sha256": sha256_file(path),
     }
 
 
@@ -75,19 +90,22 @@ def validate_class_names(names: dict[int, str] | list[str]) -> dict[int, str]:
     items = names.items() if isinstance(names, dict) else enumerate(names)
     canonical: dict[int, str] = {}
     skipped: list[str] = []
+    ignored: list[str] = []
     for class_id, name in items:
         normalized = canonical_class_name(name)
         if not normalized:
-            skipped.append(str(name))
+            (ignored if is_ignored_model_class(name) else skipped).append(str(name))
             continue
         if normalized in canonical.values():
             continue
         canonical[int(class_id)] = normalized
 
+    if ignored:
+        logger.info("Ignoring non-industrial checkpoint classes (Mask/NO-Mask): %s", ignored)
     if skipped:
-        logger.warning("Ignoring non-industrial classes in checkpoint: %s", skipped)
+        logger.warning("Ignoring unknown classes in checkpoint: %s", skipped)
 
-    # الحد الأدنى اللي فعلاً موجود في الموديل الحالي
+    # Minimum contract of the approved Model/ppe.pt checkpoint.
     required = {"Person", "Hardhat", "NO-Hardhat", "Safety Vest"}
     missing = required - set(canonical.values())
     if missing:
@@ -96,7 +114,19 @@ def validate_class_names(names: dict[int, str] | list[str]) -> dict[int, str]:
             f"Loaded: {sorted(set(canonical.values()))}"
         )
 
-    logger.info("Industrial classes loaded: %s", sorted(set(canonical.values())))
+    loaded = set(canonical.values())
+    absent_expected = [
+        name
+        for name in EXPECTED_MODEL_CLASSES
+        if canonical_class_name(name) and canonical_class_name(name) not in loaded
+    ]
+    if absent_expected:
+        logger.warning(
+            "Approved checkpoint lacks expected classes (their rules stay display-only): %s",
+            absent_expected,
+        )
+
+    logger.info("Industrial classes loaded: %s", sorted(loaded))
     return canonical
 
 
@@ -104,13 +134,10 @@ class PPEDetector:
     """One shared, thread-safe detector for RTSP, images, video and camera workers."""
 
     def __init__(self) -> None:
+        # require_model_file enforces the ppe.pt name after resolve, rejects any
+        # unified reference, checks the file and verifies the optional SHA-256 pin.
         path = require_model_file()
         self.weights_fingerprint = weight_fingerprint(path)
-        expected = settings.PPE_MODEL_SHA256.lower()
-        if expected and self.weights_fingerprint["sha256"] != expected:
-            raise RuntimeError(
-                "Approved checkpoint SHA-256 verification failed; inference will not start"
-            )
         try:
             from ultralytics import YOLO
         except ImportError as exc:

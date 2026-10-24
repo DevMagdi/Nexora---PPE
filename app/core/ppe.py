@@ -22,11 +22,36 @@ CANONICAL_CLASS_NAMES: tuple[str, ...] = (
     "NO-Goggles",
 )
 
+# The exact class vocabulary exported by the approved Model/ppe.pt checkpoint.
+# Mask/NO-Mask exist in the export but are non-industrial for Mantik PPE, so
+# they are ignored at display/rule level without ever blocking startup.
+EXPECTED_MODEL_CLASSES: tuple[str, ...] = (
+    "Hardhat",
+    "NO-Hardhat",
+    "Safety Vest",
+    "NO-Safety Vest",
+    "Mask",
+    "NO-Mask",
+    "Person",
+    "Gloves",
+    "NO-Gloves",
+    "Safety Boots",
+    "NO-Safety Boots",
+    "Goggles",
+    "NO-Goggles",
+)
+IGNORED_MODEL_CLASSES: tuple[str, ...] = ("Mask", "NO-Mask")
+
 _SEPARATOR = re.compile(r"[\s_-]+")
 
 
 def class_key(name: str) -> str:
     return _SEPARATOR.sub(" ", str(name or "").strip().casefold())
+
+
+def is_ignored_model_class(name: str) -> bool:
+    """True for checkpoint classes intentionally excluded from the product."""
+    return class_key(name) in {class_key(item) for item in IGNORED_MODEL_CLASSES}
 
 
 _ALIASES: dict[str, tuple[str, ...]] = {

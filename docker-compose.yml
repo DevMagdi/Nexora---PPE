@@ -21,7 +21,7 @@ services:
       UPLOADS_DIR: /var/nexora/videos/uploads
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Run scripts/setup_onprem.py first}
       BACKUP_DIR: /var/nexora/backups
-      PPE_MODEL_PATH: /app/Model/ppe_unified_best.pt
+      PPE_MODEL_PATH: /app/Model/ppe.pt
       DETECTION_CONFIDENCE: "0.50"
     env_file:
       - .env
@@ -47,8 +47,8 @@ services:
       - violation_frames:/app/violation_frames
       - videos:/var/nexora/videos
       - type: bind
-        source: ./Model/ppe_unified_best.pt
-        target: /app/Model/ppe_unified_best.pt
+        source: ./Model/ppe.pt
+        target: /app/Model/ppe.pt
         read_only: true
         bind:
           create_host_path: false
