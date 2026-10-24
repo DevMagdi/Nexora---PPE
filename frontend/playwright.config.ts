@@ -35,7 +35,9 @@ export default defineConfig({
   fullyParallel: true,
   workers: 2,
   retries: 0,
-  reporter: [["list"], ["json", { outputFile: "test-results/browser-results.json" }]],
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["json", { outputFile: "test-results/browser-results.json" }]]
+    : [["list"], ["json", { outputFile: "test-results/browser-results.json" }]],
   use: {
     baseURL: "http://127.0.0.1:5173",
     trace: "retain-on-failure",

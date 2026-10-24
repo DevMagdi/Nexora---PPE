@@ -58,6 +58,9 @@ def test_mantik_identity_is_central_and_has_no_alternate_palette():
     assert "rgba(201, 162, 39, 0.25)" in css
     assert "[data-theme" not in css and ".light" not in css
     assert '@import "./theme/mantik.css"' in (ROOT / "frontend/src/index.css").read_text()
+    styles = (ROOT / "frontend/src/index.css").read_text()
+    transition = styles.split("@keyframes pageEnter", 1)[1].split("@keyframes skeletonPulse", 1)[0]
+    assert "opacity" not in transition  # text contrast must also hold during navigation
 
 
 def test_browser_fixtures_are_not_imported_by_production_code():
