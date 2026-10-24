@@ -83,6 +83,6 @@ async def test_alembic_upgrade_applies_the_full_schema_to_sqlite(tmp_path, monke
             revision = connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert revision == "20261024ind"
+        assert revision == "20261024src"
     finally:
         engine.dispose()

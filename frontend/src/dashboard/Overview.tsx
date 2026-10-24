@@ -153,7 +153,7 @@ export default function Overview({
           </article>
         ))}
       </section>
-      <div className="grid gap-5 xl:grid-cols-[1.7fr_1fr]">
+      <div className="grid gap-6 xl:grid-cols-[1.7fr_1fr]">
         <section className="panel min-w-0">
           <div className="panel-header">
             <div>

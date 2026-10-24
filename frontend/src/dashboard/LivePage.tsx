@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query"
 import { Cctv, Loader2, Play, RefreshCw, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Empty, InlineError } from "@/components/Feedback"
+import { CONNECTION_LABEL, sourceIsBusy } from "@/cameras/sources"
 import useLiveCamera from "@/hooks/useLiveCamera"
 import { getMjpegStreamUrl, startCamera, stopCamera } from "@/lib/api"
 import { RULE_LABEL, num } from "@/lib/formatters"
@@ -28,10 +29,13 @@ export default function LivePage({
   const camera = cameras.find((item) => item.id === selectedId) ?? cameras[0]
   const live = useLiveCamera(camera?.id, camera?.is_running ?? false, attempt)
   const toggle = useMutation({
-    mutationFn: () => (camera.is_running ? stopCamera(camera.id) : startCamera(camera.id)),
+    mutationFn: () => (sourceIsBusy(camera) ? stopCamera(camera.id) : startCamera(camera.id)),
     onSuccess: async () => {
       setImageError(false)
       setAttempt((value) => value + 1)
+      await refresh()
+    },
+    onError: async () => {
       await refresh()
     },
   })
@@ -56,7 +60,7 @@ export default function LivePage({
     live.counts?.no_goggles,
   ]
   return (
-    <div className="grid items-start gap-5 xl:grid-cols-[1fr_270px]">
+    <div className="grid items-start gap-6 xl:grid-cols-[1fr_270px]">
       <section className="panel min-w-0 overflow-hidden">
         <div className="panel-header">
           <div>
@@ -65,9 +69,16 @@ export default function LivePage({
           </div>
           <span className={`badge ${live.status === "مباشر" ? "badge-success" : ""}`}>
             <span className="status-dot" />
-            {live.status}
+            {camera.is_running
+              ? live.status
+              : (CONNECTION_LABEL[camera.connection_status] ?? "متوقفة")}
           </span>
         </div>
+        {camera.last_error && (
+          <p className="notice notice-error m-5" role="alert">
+            {camera.last_error}
+          </p>
+        )}
         <div className="live-canvas">
           {camera.is_running && !imageError ? (
             <>
@@ -82,7 +93,17 @@ export default function LivePage({
           ) : (
             <div className="empty-state">
               <Cctv />
-              <h3>{imageError ? "تعذّر عرض البث" : "مصدر المراقبة متوقف"}</h3>
+              <h3>
+                {imageError
+                  ? "تعذّر عرض البث"
+                  : camera.connection_status === "completed"
+                    ? "اكتملت معالجة الفيديو"
+                    : camera.connection_status === "error"
+                      ? "فشل اتصال المصدر"
+                      : sourceIsBusy(camera)
+                        ? "إعادة اتصال بالمصدر"
+                        : "مصدر المراقبة متوقف"}
+              </h3>
               <p>
                 {imageError
                   ? "تحقق من الاتصال وصلاحية جلسة البث، ثم أعد المحاولة."
@@ -102,7 +123,8 @@ export default function LivePage({
               ) : (
                 canOperate && (
                   <Button disabled={toggle.isPending} onClick={() => toggle.mutate()}>
-                    {toggle.isPending ? <Loader2 className="animate-spin" /> : <Play />}تشغيل المصدر
+                    {toggle.isPending ? <Loader2 /> : <Play />}
+                    {sourceIsBusy(camera) ? "إيقاف المحاولة" : "تشغيل المصدر"}
                   </Button>
                 )
               )}
@@ -120,14 +142,8 @@ export default function LivePage({
               disabled={toggle.isPending}
               onClick={() => toggle.mutate()}
             >
-              {toggle.isPending ? (
-                <Loader2 className="animate-spin" />
-              ) : camera.is_running ? (
-                <Square />
-              ) : (
-                <Play />
-              )}
-              {camera.is_running ? "إيقاف البث" : "بدء البث"}
+              {toggle.isPending ? <Loader2 /> : sourceIsBusy(camera) ? <Square /> : <Play />}
+              {sourceIsBusy(camera) ? "إيقاف البث" : "بدء البث"}
             </Button>
           )}
         </div>
@@ -150,7 +166,7 @@ export default function LivePage({
         </div>
       </section>
       <div className="space-y-5">
-        <section className="panel p-5">
+        <section className="panel p-6">
           <label htmlFor="live-camera" className="field-label">
             مصدر المراقبة
           </label>
@@ -163,7 +179,7 @@ export default function LivePage({
             {cameras.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
-                {item.is_running ? " · متصلة" : " · متوقفة"}
+                {` · ${CONNECTION_LABEL[item.connection_status] ?? "متوقفة"}`}
               </option>
             ))}
           </select>
@@ -176,7 +192,7 @@ export default function LivePage({
             ))}
           </div>
         </section>
-        <section className="panel p-5">
+        <section className="panel p-6">
           <h2 className="mb-4 text-sm">المخالفات في الإطار الحالي</h2>
           <div className="space-y-4">
             {["بدون خوذة", "بدون سترة", "بدون قفازات", "بدون حذاء أمان", "بدون نظارات"].map(

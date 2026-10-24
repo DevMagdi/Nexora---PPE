@@ -202,7 +202,7 @@ export default function UsersPage({ refresh }: { refresh: () => Promise<void> })
           </div>
           <InlineError error={create.error} />
           <Button className="w-full" type="submit" disabled={create.isPending}>
-            {create.isPending && <Loader2 className="animate-spin" />}إصدار الحساب
+            {create.isPending && <Loader2 />}إصدار الحساب
           </Button>
         </form>
       </Modal>
@@ -221,7 +221,7 @@ export default function UsersPage({ refresh }: { refresh: () => Promise<void> })
             if (reset) password.mutate(reset.id)
           }}
         >
-          {password.isPending && <Loader2 className="animate-spin" />}تأكيد إعادة التعيين
+          {password.isPending && <Loader2 />}تأكيد إعادة التعيين
         </Button>
       </Modal>
       <Modal
@@ -240,7 +240,7 @@ export default function UsersPage({ refresh }: { refresh: () => Promise<void> })
               اسم المستخدم: <span className="latin text-foreground">{issued.username}</span>
             </p>
             <code
-              className="block select-all break-all rounded-lg border border-border bg-muted p-4 text-center text-sm text-primary"
+              className="block select-all break-all rounded-lg border border-border bg-muted p-4 text-center text-sm text-muted-foreground"
               dir="ltr"
             >
               {issued.initial_password}

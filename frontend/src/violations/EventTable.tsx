@@ -90,11 +90,7 @@ export default function EventTable({
                       disabled={pendingId !== undefined}
                       onClick={() => onResolve(item.id)}
                     >
-                      {pendingId === item.id ? (
-                        <Loader2 className="animate-spin" />
-                      ) : (
-                        <CheckCheck />
-                      )}
+                      {pendingId === item.id ? <Loader2 /> : <CheckCheck />}
                       معالجة
                     </Button>
                   )}

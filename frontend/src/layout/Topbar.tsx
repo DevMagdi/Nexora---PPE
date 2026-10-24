@@ -38,7 +38,7 @@ export default function Topbar({
         </Button>
         <div>
           <div className="mb-1 hidden text-[10px] text-muted-foreground sm:block">
-            المنصة الصناعية <span className="mx-2 text-primary">/</span>غرفة العمليات
+            المنصة الصناعية <span className="mx-2 text-muted-foreground">/</span>غرفة العمليات
           </div>
           <div className="text-sm font-medium text-foreground">{TAB_TITLES[tab]}</div>
         </div>
@@ -55,7 +55,7 @@ export default function Topbar({
           onClick={onRefresh}
           disabled={refreshing}
         >
-          <RefreshCw className={refreshing ? "animate-spin" : ""} />
+          <RefreshCw className={refreshing ? "" : ""} />
         </Button>
         <Button
           variant="outline"

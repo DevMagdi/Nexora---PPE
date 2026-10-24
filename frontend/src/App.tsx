@@ -156,6 +156,7 @@ export default function App({ user }: { user: MeResponse }) {
       <CamerasPage
         cameras={cameraList}
         sites={siteList}
+        meta={system.data}
         canOperate={canOperate}
         onLive={live}
         refresh={refresh}

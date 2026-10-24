@@ -14,6 +14,8 @@ from app.camera.source import CameraSource
 class FileSource(CameraSource):
     """Process uploaded/site videos once, at their recorded frame rate."""
 
+    reconnect_allowed = False
+
     def __init__(self, path: str) -> None:
         self.path = path
         self.exhausted = False

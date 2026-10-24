@@ -1,4 +1,4 @@
-/* MANTIK identity: the only supported palette. No alternate/light mode. */
+/* MANTIK: the sole color source. Deliberately no alternate/light palette. */
 :root {
   color-scheme: dark;
   --navy: #16283f;
@@ -10,37 +10,47 @@
   --text: #f5f5f5;
   --text-soft: #e8e8e8;
   --text-muted: #a8b0bc;
-  --gold-border: rgba(201, 162, 39, 0.25);
+  --gold-border: rgba(201, 162, 39, 0.12);
 
   --background: var(--navy);
+  --page-background: linear-gradient(
+    155deg,
+    var(--navy-panel) 0%,
+    var(--navy) 38%,
+    var(--navy-deep) 100%
+  );
   --foreground: var(--text);
   --card: var(--navy-panel);
   --card-foreground: var(--text-soft);
   --popover: var(--navy-deep);
   --popover-foreground: var(--text);
   --primary: var(--gold);
+  --primary-hover: var(--gold-soft);
   --primary-foreground: var(--navy-deep);
   --secondary: var(--navy-deep);
-  --secondary-foreground: var(--gold-soft);
+  --secondary-foreground: var(--text-soft);
   --muted: var(--navy-deep);
   --muted-foreground: var(--text-muted);
-  --accent: rgba(201, 162, 39, 0.1);
+  --accent: rgba(201, 162, 39, 0.045);
   --accent-foreground: var(--gold-soft);
   --border: var(--gold-border);
+  --separator: rgba(168, 176, 188, 0.09);
   --input: var(--gold-border);
   --ring: var(--gold);
   --success: #7eb394;
-  --success-light: rgba(126, 179, 148, 0.12);
+  --success-light: rgba(126, 179, 148, 0.08);
+  --success-border: rgba(126, 179, 148, 0.14);
   --destructive: #ef7777;
   --destructive-foreground: var(--navy-deep);
-  --destructive-light: rgba(239, 119, 119, 0.12);
+  --destructive-light: rgba(239, 119, 119, 0.08);
+  --destructive-border: rgba(239, 119, 119, 0.14);
   --chart-gold: var(--gold);
   --chart-soft: var(--gold-soft);
   --chart-muted: var(--gold-muted);
   --chart-neutral: var(--text-muted);
-  --chart-grid: var(--gold-border);
+  --chart-grid: var(--separator);
   --chart-axis: var(--text-muted);
-  --shadow-card: 0 8px 24px rgba(17, 27, 43, 0.22);
-  --shadow-floating: 0 24px 80px rgba(17, 27, 43, 0.7);
-  --radius: 0.85rem;
+  --shadow-card: 0 16px 52px rgba(17, 27, 43, 0.14);
+  --shadow-floating: 0 28px 96px rgba(17, 27, 43, 0.32);
+  --radius: 1.1rem;
 }

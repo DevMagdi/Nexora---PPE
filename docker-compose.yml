@@ -13,7 +13,10 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:?Run scripts/setup_onprem.py and set the HTTPS origin}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:?Run scripts/setup_onprem.py and set the HTTPS host}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:?Run scripts/setup_onprem.py to set the trusted Caddy address}
-      ALLOWED_RTSP_PREFIXES: ${ALLOWED_RTSP_PREFIXES:?Set camera network allowlists in .env}
+      ALLOWED_RTSP_PREFIXES: ${ALLOWED_RTSP_PREFIXES:-}
+      ALLOWED_HTTP_CAMERA_PREFIXES: ${ALLOWED_HTTP_CAMERA_PREFIXES:-}
+      ENABLE_USB_SOURCES: "false"
+      ALLOW_LOOPBACK_HTTP_SOURCES: "false"
       ALLOWED_VIDEO_DIR: /var/nexora/videos
       UPLOADS_DIR: /var/nexora/videos/uploads
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Run scripts/setup_onprem.py first}

@@ -72,6 +72,8 @@ async def test_client(db_session: AsyncSession, test_user: User):
 
     mock_manager = MagicMock()
     mock_manager.is_running.return_value = False
+    mock_manager.get_connection_status.return_value = "stopped"
+    mock_manager.get_last_error.return_value = None
     mock_manager.active_count.return_value = 0
     mock_manager.counts_snapshot.return_value = {}
     mock_manager.start = AsyncMock()

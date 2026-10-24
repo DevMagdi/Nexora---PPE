@@ -71,7 +71,7 @@ function SiteForm({ site, onSuccess }: { site?: Site; onSuccess: () => void }) {
       </div>
       <InlineError error={mutation.error} />
       <Button className="w-full" type="submit" disabled={mutation.isPending}>
-        {mutation.isPending ? <Loader2 className="animate-spin" /> : <Save />}حفظ الموقع
+        {mutation.isPending ? <Loader2 /> : <Save />}حفظ الموقع
       </Button>
     </form>
   )
@@ -115,7 +115,7 @@ export default function SitesPage({
           />
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {sites.map((site) => (
             <article key={site.id} className="panel p-6">
               <div className="mb-5 flex items-center justify-between">
@@ -198,7 +198,7 @@ export default function SitesPage({
               if (target) remove.mutate(target.id)
             }}
           >
-            {remove.isPending && <Loader2 className="animate-spin" />}حذف الموقع
+            {remove.isPending && <Loader2 />}حذف الموقع
           </Button>
         </div>
       </Modal>

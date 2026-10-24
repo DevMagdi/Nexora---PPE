@@ -129,11 +129,11 @@ export default function ViolationsPage({
           disabled={exporting || !query.data?.total}
           onClick={() => void exportCsv()}
         >
-          {exporting ? <Loader2 className="animate-spin" /> : <Download />}تصدير CSV
+          {exporting ? <Loader2 /> : <Download />}تصدير CSV
         </Button>
       </div>
       {exportError ? (
-        <div className="p-5">
+        <div className="p-6">
           <InlineError error={exportError} />
         </div>
       ) : null}

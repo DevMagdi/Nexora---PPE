@@ -105,7 +105,7 @@ export default function AuthGate() {
         </div>
         <div className="login-story-footer flex flex-wrap items-center justify-between gap-4 border-t border-border pt-6 text-[11px] text-muted-foreground">
           <span className="flex items-center gap-2">
-            <Factory className="size-4 text-primary" />
+            <Factory className="size-4 text-muted-foreground" />
             مصانع · مواقع إنشاء · ورش · مستودعات
           </span>
           <span className="eyebrow !text-[8px]">INDUSTRIAL ONLY</span>
@@ -115,13 +115,13 @@ export default function AuthGate() {
         <div className="hidden items-center justify-between text-[11px] text-muted-foreground md:flex">
           <span>بوابة العمليات</span>
           <span className="flex items-center gap-2">
-            <LockKeyhole className="size-3.5 text-primary" />
+            <LockKeyhole className="size-3.5 text-muted-foreground" />
             وصول مصرّح به فقط
           </span>
         </div>
         <div className="login-card">
           <div className="mb-7">
-            <div className="mb-5 grid size-12 place-items-center rounded-xl border border-border bg-accent text-primary">
+            <div className="mb-5 grid size-12 place-items-center rounded-lg border border-border bg-accent text-muted-foreground">
               <ShieldCheck className="size-6" strokeWidth={1.4} />
             </div>
             <div className="eyebrow mb-2" dir="ltr">
@@ -178,7 +178,7 @@ export default function AuthGate() {
                 />
                 <button
                   type="button"
-                  className="absolute end-2 top-1 grid size-9 place-items-center rounded text-muted-foreground hover:text-primary"
+                  className="absolute end-2 top-1 grid size-9 place-items-center rounded text-muted-foreground hover:text-foreground"
                   onClick={() => setVisible(!visible)}
                   aria-label={visible ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
                 >
@@ -210,7 +210,7 @@ export default function AuthGate() {
               className="h-11 w-full font-semibold"
               disabled={mutation.isPending}
             >
-              {mutation.isPending ? <Loader2 className="animate-spin" /> : <LockKeyhole />}
+              {mutation.isPending ? <Loader2 /> : <LockKeyhole />}
               {mutation.isPending ? "جارٍ تسجيل الدخول…" : "الدخول إلى لوحة العمليات"}
             </Button>
           </form>
