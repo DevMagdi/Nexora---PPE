@@ -120,7 +120,7 @@ export default function AuthGate() {
           </span>
         </div>
         <div className="login-card">
-          <div className="mb-7">
+          <div className="mb-10">
             <div className="mb-5 grid size-12 place-items-center rounded-lg border border-border bg-accent text-muted-foreground">
               <ShieldCheck className="size-6" strokeWidth={1.4} />
             </div>
@@ -133,7 +133,7 @@ export default function AuthGate() {
             </p>
           </div>
           <form
-            className="space-y-5"
+            className="space-y-6"
             onSubmit={(event) => {
               event.preventDefault()
               mutation.mutate()

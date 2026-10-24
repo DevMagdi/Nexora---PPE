@@ -80,6 +80,7 @@ export default function CamerasPage({
       {!list.length ? (
         <div className="panel">
           <Empty
+            icon={query ? <Search /> : <Cctv />}
             title={query ? "لا توجد نتائج" : "ابدأ بأول مصدر للمراقبة"}
             description={
               query
@@ -88,7 +89,7 @@ export default function CamerasPage({
             }
             action={
               canOperate && !query ? (
-                <Button variant="outline" onClick={() => setForm("new")}>
+                <Button onClick={() => setForm("new")}>
                   <Plus />
                   إضافة مصدر كاميرا
                 </Button>
@@ -99,7 +100,7 @@ export default function CamerasPage({
       ) : (
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {list.map((camera) => (
-            <article key={camera.id} className="panel overflow-hidden">
+            <article key={camera.id} className="panel panel-hover overflow-hidden">
               <div className="camera-preview">
                 <Cctv />
                 <span

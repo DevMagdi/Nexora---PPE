@@ -59,7 +59,7 @@ export default function ViolationsPage({
   }
   return (
     <section className="panel overflow-hidden">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border p-5">
+      <div className="flex flex-wrap items-end justify-between gap-5 border-b border-border px-6 py-5">
         <div className="flex flex-wrap gap-3">
           <div>
             <label className="field-label" htmlFor="event-camera">
@@ -151,7 +151,7 @@ export default function ViolationsPage({
             onResolve={onResolve}
             onEvidence={onEvidence}
           />
-          <div className="flex items-center justify-between border-t border-border p-4 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between border-t border-border px-6 py-4 text-xs text-muted-foreground">
             <span>
               {num(query.data.total)} حدث · صفحة {num(page)} من {num(totalPages)}
             </span>

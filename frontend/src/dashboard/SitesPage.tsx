@@ -97,7 +97,7 @@ export default function SitesPage({
     },
   })
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">{num(sites.length)} مصنع وموقع صناعي</p>
         {isAdmin && (
@@ -110,6 +110,7 @@ export default function SitesPage({
       {!sites.length ? (
         <div className="panel">
           <Empty
+            icon={<Factory />}
             title="منظور واحد لكل مواقعك"
             description="أضف مصانعك ومواقع الإنشاء والورش والمستودعات، ثم اربط الكاميرات بها من إعدادات المصدر."
           />
@@ -117,7 +118,7 @@ export default function SitesPage({
       ) : (
         <div className="grid gap-7 sm:grid-cols-2 xl:grid-cols-3">
           {sites.map((site) => (
-            <article key={site.id} className="panel p-6">
+            <article key={site.id} className="panel panel-hover p-6">
               <div className="mb-5 flex items-center justify-between">
                 <span className="metric-icon">
                   <Factory />

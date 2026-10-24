@@ -40,11 +40,15 @@ export default function Topbar({
           <div className="mb-1 hidden text-[10px] text-muted-foreground sm:block">
             المنصة الصناعية <span className="mx-2 text-muted-foreground">/</span>غرفة العمليات
           </div>
-          <div className="text-sm font-medium text-foreground">{TAB_TITLES[tab]}</div>
+          <div className="text-[15px] font-semibold leading-tight text-foreground">
+            {TAB_TITLES[tab]}
+          </div>
         </div>
       </div>
       <div className="flex items-center gap-2 sm:gap-4">
-        <span className={`badge hidden lg:inline-flex ${healthy ? "badge-success" : ""}`}>
+        <span
+          className={`badge status-quiet hidden lg:inline-flex ${healthy ? "badge-success" : ""}`}
+        >
           <span className="status-dot" />
           {healthy ? "الخادم متصل" : "بانتظار الخادم"}
         </span>

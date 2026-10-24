@@ -15,6 +15,7 @@
   /* Hairlines: structure is neutral, gold stays an accent. */
   --hairline: rgba(168, 176, 188, 0.1);
   --hairline-soft: rgba(168, 176, 188, 0.06);
+  --hairline-strong: rgba(168, 176, 188, 0.16);
   --gold-hairline: rgba(201, 162, 39, 0.1);
   --gold-hairline-focus: rgba(201, 162, 39, 0.18);
 
@@ -50,6 +51,8 @@
   --destructive-foreground: var(--navy-deep);
   --destructive-light: rgba(239, 119, 119, 0.08);
   --destructive-border: rgba(239, 119, 119, 0.14);
+  /* Calm destructive copy for errors; no shouting red blocks. */
+  --destructive-quiet: color-mix(in srgb, var(--destructive) 78%, var(--text-soft));
   --chart-gold: var(--text-soft);
   --chart-soft: var(--text-muted);
   --chart-muted: color-mix(in srgb, var(--text-muted) 65%, var(--navy-panel));
@@ -63,6 +66,19 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.035);
   --shadow-floating: 0 32px 92px -28px rgba(7, 13, 23, 0.92), 0 8px 26px -14px rgba(7, 13, 23, 0.5);
   --shadow-subtle: 0 10px 30px -22px rgba(7, 13, 23, 0.7);
+  --shadow-card-hover:
+    0 28px 72px -34px rgba(7, 13, 23, 0.95), 0 3px 14px -8px rgba(7, 13, 23, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --row-hover: rgba(201, 162, 39, 0.04);
+
+  /* Typographic scale: one clear hierarchy, not one weight for everything. */
+  --text-page-title: clamp(1.55rem, 1.16rem + 0.7vw, 1.85rem);
+  --text-section: 1rem;
+  --text-body: 0.875rem;
+  --text-meta: 0.75rem;
+  --text-micro: 0.6875rem;
+  --leading-body: 1.75;
+  --leading-tight: 1.35;
 
   --radius: 1.1rem;
   --radius-control: 0.9rem;
