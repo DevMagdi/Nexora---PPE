@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation } from "@tanstack/react-query"
-import { Cctv, Loader2, Play, RefreshCw, Square } from "lucide-react"
+import { Cctv, Loader2, Play, RefreshCw, ShieldAlert, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Empty, InlineError } from "@/components/Feedback"
 import { CONNECTION_LABEL, sourceIsBusy } from "@/cameras/sources"
@@ -47,6 +47,7 @@ export default function LivePage({
     return (
       <div className="panel">
         <Empty
+          icon={<Cctv />}
           title="لا توجد مصادر للمراقبة"
           description="أضف كاميرا RTSP أو ارفع فيديو لبدء رصد معدات الوقاية الصناعية."
         />
@@ -60,7 +61,7 @@ export default function LivePage({
     live.counts?.no_goggles,
   ]
   return (
-    <div className="grid items-start gap-7 xl:grid-cols-[1fr_280px]">
+    <div className="grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_288px]">
       <section className="panel min-w-0 overflow-hidden">
         <div className="panel-header">
           <div>
@@ -75,64 +76,68 @@ export default function LivePage({
           </span>
         </div>
         {camera.last_error && (
-          <p className="notice notice-error m-5" role="alert">
+          <p className="notice notice-error mx-5 mt-5" role="alert">
             {camera.last_error}
           </p>
         )}
-        <div className="live-canvas">
-          {camera.is_running && !imageError ? (
-            <>
-              <img
-                key={`${camera.id}-${attempt}`}
-                src={getMjpegStreamUrl(camera.id)}
-                alt={`بث مباشر من ${camera.name}`}
-                onError={() => setImageError(true)}
-              />
-              <span className="badge absolute start-4 top-4 latin">LIVE / CAM-{camera.id}</span>
-            </>
-          ) : (
-            <div className="empty-state">
-              <Cctv />
-              <h3>
-                {imageError
-                  ? "تعذّر عرض البث"
-                  : camera.connection_status === "completed"
-                    ? "اكتملت معالجة الفيديو"
-                    : camera.connection_status === "error"
-                      ? "فشل اتصال المصدر"
-                      : sourceIsBusy(camera)
-                        ? "إعادة اتصال بالمصدر"
-                        : "مصدر المراقبة متوقف"}
-              </h3>
-              <p>
-                {imageError
-                  ? "تحقق من الاتصال وصلاحية جلسة البث، ثم أعد المحاولة."
-                  : "شغّل المصدر لبدء الاستدلال. لا يتم عرض إطارات أو عدادات تجريبية."}
-              </p>
-              {imageError ? (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setImageError(false)
-                    setAttempt((value) => value + 1)
-                  }}
-                >
-                  <RefreshCw />
-                  إعادة الاتصال
-                </Button>
-              ) : (
-                canOperate && (
-                  <Button disabled={toggle.isPending} onClick={() => toggle.mutate()}>
-                    {toggle.isPending ? <Loader2 /> : <Play />}
-                    {sourceIsBusy(camera) ? "إيقاف المحاولة" : "تشغيل المصدر"}
+        <div className="live-stage">
+          <div className="live-canvas">
+            {camera.is_running && !imageError ? (
+              <>
+                <img
+                  key={`${camera.id}-${attempt}`}
+                  src={getMjpegStreamUrl(camera.id)}
+                  alt={`بث مباشر من ${camera.name}`}
+                  onError={() => setImageError(true)}
+                />
+                <span className="badge absolute start-4 top-4 latin">LIVE / CAM-{camera.id}</span>
+              </>
+            ) : (
+              <div className="empty-state">
+                <span className="empty-state-icon" aria-hidden="true">
+                  <Cctv />
+                </span>
+                <h3>
+                  {imageError
+                    ? "تعذّر عرض البث"
+                    : camera.connection_status === "completed"
+                      ? "اكتملت معالجة الفيديو"
+                      : camera.connection_status === "error"
+                        ? "فشل اتصال المصدر"
+                        : sourceIsBusy(camera)
+                          ? "إعادة اتصال بالمصدر"
+                          : "مصدر المراقبة متوقف"}
+                </h3>
+                <p>
+                  {imageError
+                    ? "تحقق من الاتصال وصلاحية جلسة البث، ثم أعد المحاولة."
+                    : "شغّل المصدر لبدء الاستدلال. لا يتم عرض إطارات أو عدادات تجريبية."}
+                </p>
+                {imageError ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setImageError(false)
+                      setAttempt((value) => value + 1)
+                    }}
+                  >
+                    <RefreshCw />
+                    إعادة الاتصال
                   </Button>
-                )
-              )}
-            </div>
-          )}
+                ) : (
+                  canOperate && (
+                    <Button disabled={toggle.isPending} onClick={() => toggle.mutate()}>
+                      {toggle.isPending ? <Loader2 /> : <Play />}
+                      {sourceIsBusy(camera) ? "إيقاف المحاولة" : "تشغيل المصدر"}
+                    </Button>
+                  )
+                )}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-4">
-          <span className="text-[10px] text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4">
+          <span className="text-[11px] text-muted-foreground">
             مراقبة صناعية · معدات الوقاية المفعّلة فقط
           </span>
           {canOperate && (
@@ -152,20 +157,20 @@ export default function LivePage({
             <InlineError error={toggle.error} />
           </div>
         )}
-        <div className="grid grid-cols-3 border-t border-border">
+        <div className="quiet-strip">
           {[
             { label: "رصد أشخاص", value: live.counts?.person },
             { label: "رصد خوذات", value: live.counts?.hardhat },
             { label: "رصد سترات", value: live.counts?.vest },
           ].map((item) => (
-            <div className="border-s border-border p-5 text-center first:border-0" key={item.label}>
-              <div className="latin text-2xl">{num(item.value)}</div>
-              <p className="mt-2 text-[10px] text-muted-foreground">{item.label}</p>
+            <div key={item.label}>
+              <div className="quiet-strip-value">{num(item.value)}</div>
+              <p className="quiet-strip-label">{item.label}</p>
             </div>
           ))}
         </div>
       </section>
-      <div className="space-y-5">
+      <div className="space-y-6">
         <section className="panel p-6">
           <label htmlFor="live-camera" className="field-label">
             مصدر المراقبة
@@ -193,11 +198,14 @@ export default function LivePage({
           </div>
         </section>
         <section className="panel p-6">
-          <h2 className="mb-4 text-sm">المخالفات في الإطار الحالي</h2>
-          <div className="space-y-4">
+          <div className="mb-2 flex items-center gap-2">
+            <ShieldAlert className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            <h2 className="text-sm font-medium">المخالفات في الإطار الحالي</h2>
+          </div>
+          <div>
             {["بدون خوذة", "بدون سترة", "بدون قفازات", "بدون حذاء أمان", "بدون نظارات"].map(
               (label, index) => (
-                <div key={label} className="flex items-center justify-between text-xs">
+                <div key={label} className="stat-row">
                   <span className="text-muted-foreground">{label}</span>
                   <span
                     className={`latin ${negatives[index] ? "text-destructive" : "text-foreground"}`}

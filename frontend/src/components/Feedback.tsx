@@ -15,14 +15,18 @@ export function Empty({
   title,
   description,
   action,
+  icon,
 }: {
   title: string
   description: string
   action?: ReactNode
+  icon?: ReactNode
 }) {
   return (
     <div className="empty-state">
-      <Inbox />
+      <span className="empty-state-icon" aria-hidden="true">
+        {icon ?? <Inbox />}
+      </span>
       <h3>{title}</h3>
       <p>{description}</p>
       {action}
@@ -32,7 +36,9 @@ export function Empty({
 export function ErrorPanel({ error, retry }: { error: unknown; retry?: () => void }) {
   return (
     <div role="alert" className="empty-state">
-      <AlertTriangle className="!text-destructive" />
+      <span className="empty-state-icon" aria-hidden="true">
+        <AlertTriangle className="!text-destructive" />
+      </span>
       <h3>تعذّر تحميل البيانات</h3>
       <p>{getErrorMessage(error)}</p>
       {retry && (

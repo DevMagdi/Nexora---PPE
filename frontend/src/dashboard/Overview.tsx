@@ -5,6 +5,7 @@ import {
   Factory,
   FileClock,
   HardHat,
+  PieChart as PieChartIcon,
   Radio,
   ShieldCheck,
   TriangleAlert,
@@ -90,7 +91,9 @@ export default function Overview({
             <div className="eyebrow mb-3" dir="ltr">
               YOUR SITE. IN SIGHT.
             </div>
-            <h2 className="text-2xl leading-relaxed">السلامة في قلب كل عملية.</h2>
+            <h2 className="industrial-hero-title text-2xl leading-relaxed">
+              السلامة في قلب كل عملية.
+            </h2>
             <p className="mt-3 text-xs leading-[2] text-muted-foreground">
               رؤية موحّدة لمعدات الوقاية في مصانعك ومواقعك. تابع المصادر المباشرة، وثّق المخالفات،
               وامنح فريق السلامة المعلومات اللازمة للاستجابة.
@@ -128,13 +131,15 @@ export default function Overview({
         </div>
       </section>
       <section
-        className="grid grid-cols-2 gap-4 xl:grid-cols-4 sm:gap-6"
+        className="grid grid-cols-2 gap-5 xl:grid-cols-4 sm:gap-7"
         aria-label="مؤشرات التشغيل"
       >
         {cards.map((item) => (
           <article className="panel metric-card" key={item.label}>
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] text-muted-foreground">{item.label}</p>
+              <p className="text-[11px] font-medium tracking-wide text-muted-foreground">
+                {item.label}
+              </p>
               <span
                 className={`metric-icon ${item.alert && item.value ? "!border-destructive/25 !bg-destructive-light !text-destructive" : ""}`}
               >
@@ -149,7 +154,9 @@ export default function Overview({
                 <span className="ms-2 text-sm text-muted-foreground">{item.suffix}</span>
               )}
             </div>
-            <p className="mt-3 text-[10px] text-muted-foreground">{item.note}</p>
+            <p className="mt-auto pt-4 text-[10px] leading-relaxed text-muted-foreground">
+              {item.note}
+            </p>
           </article>
         ))}
       </section>
@@ -278,6 +285,7 @@ export default function Overview({
             </div>
           ) : (
             <Empty
+              icon={<PieChartIcon />}
               title="لا توجد مخالفات مسجّلة"
               description="سيظهر توزيع الأحداث عند توفّر بيانات فعلية."
             />

@@ -234,7 +234,9 @@ export default function UploadsPage({
           </>
         ) : camera ? (
           <div className="empty-state">
-            <Video />
+            <span className="empty-state-icon" aria-hidden="true">
+              <Video />
+            </span>
             <h3>تم تجهيز مصدر الفيديو</h3>
             <p>«{camera.name}» جاهز لبدء المعالجة عبر نفس كاشف معدات الوقاية.</p>
             <Button onClick={() => onLive(camera.id)}>
@@ -243,8 +245,10 @@ export default function UploadsPage({
             </Button>
           </div>
         ) : (
-          <div className="empty-state min-h-[400px]">
-            <ScanLine />
+          <div className="empty-state min-h-[420px]">
+            <span className="empty-state-icon" aria-hidden="true">
+              <ScanLine />
+            </span>
             <h3>{mutation.isPending ? "جارٍ معالجة الملف" : "بانتظار ملف من موقعك"}</h3>
             <p>
               ستظهر نتائج الموديل الفعلية هنا بعد الرفع. لا توجد نتائج أو بيانات تجريبية مضمّنة.

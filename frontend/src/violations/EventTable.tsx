@@ -1,4 +1,4 @@
-import { CheckCheck, Image, Loader2 } from "lucide-react"
+import { CheckCheck, FileClock, Image, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Empty } from "@/components/Feedback"
 import { classLabel, formatDate, formatTime } from "@/lib/formatters"
@@ -22,6 +22,7 @@ export default function EventTable({
   if (!items.length)
     return (
       <Empty
+        icon={<FileClock />}
         title="لا توجد أحداث في هذه الفترة"
         description="ستظهر المخالفات الصناعية هنا بعد رصد دليل مستمر من الكاميرات. لا تعني القائمة الفارغة قياس نسبة الالتزام."
       />
@@ -43,13 +44,13 @@ export default function EventTable({
           {items.map((item) => (
             <tr key={item.id}>
               <td>
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-3">
                   <span
                     className={`h-7 w-0.5 rounded-full ${item.is_resolved ? "bg-success" : "bg-destructive"}`}
                   />
                   <div className="font-medium text-foreground">
                     {classLabel(item.violation_type)}
-                    <span className="latin mt-1 block text-[9px] text-muted-foreground">
+                    <span className="latin mt-1 block text-[9px] tracking-wide text-muted-foreground">
                       EVT-{String(item.id).padStart(5, "0")}
                     </span>
                   </div>
@@ -65,7 +66,7 @@ export default function EventTable({
                   {formatDate(item.timestamp)}
                 </div>
               </td>
-              <td className="latin">{Math.round(item.confidence * 100)}%</td>
+              <td className="latin text-muted-foreground">{Math.round(item.confidence * 100)}%</td>
               <td>
                 <span className={`badge ${item.is_resolved ? "badge-success" : "badge-danger"}`}>
                   <span className="status-dot" />
